@@ -1,0 +1,11 @@
+services:
+  watcher:
+    build: .
+    container_name: watcher
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - CHECK_INTERVAL=300
+      - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1488871705572278344/Kf-2s2570ozcYBXzWJAfrioD-H-Xaf0cYAv6nS9zAIfblQF2ILoI8-Na8a9oKuCV1qvW
+      - DRY_RUN=false
+    restart: unless-stopped
