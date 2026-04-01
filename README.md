@@ -1,13 +1,28 @@
-# Watcher
+# 🛡️ Watcher
 
-Lightweight Docker container updater for standalone hosts. Focuses on safe recreation and bit-perfect rollbacks.
+![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-v0.1.0--alpha-orange)
+![Docker](https://img.shields.io/badge/docker-supported-blue?logo=docker)
 
-## Features
-- **Auto-Update**: Pulls and recreates containers with the `:latest` tag.
-- **Config Preservation**: Reconstructs containers from runtime configuration (Ports, Volumes, Env, Labels, etc.).
-- **Health Verification**: Retries checks post-update to ensure stability.
-- **Automated Rollback**: Reverts to the exact previous **Image ID** if the update fails.
-- **Discord Alerts**: Informative embed-based notifications.
+**Watcher** is a hardened, Python-based alternative to Watchtower. It monitors your Docker containers for image updates and performs bit-perfect recreations with automated health checks and Discord notifications.
 
-## Safety
-Watcher works exclusively through the Docker API. It does not touch YAML files. Rollbacks use cryptographic Image IDs to guarantee state recovery.
+## 🚀 Key Features
+* **Intelligent Updates:** Only recreates containers when a new `:latest` image is actually pulled.
+* **Config Preservation:** 1:1 reconstruction of Ports, Volumes, ENV vars, and Labels.
+* **Deterministic Networking:** Uses `networking_config` to prevent IP-address loss.
+* **Safety First:** Automated rollbacks if a container becomes `unhealthy` after an update.
+* **Discord Integration:** Real-time status embeds for your homelab monitoring.
+
+## ⚙️ Configuration
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `CHECK_INTERVAL` | Seconds between update checks | `300` |
+| `DISCORD_WEBHOOK_URL` | Your Discord channel webhook | `None` |
+| `DRY_RUN` | If `true`, only checks but doesn't restart | `false` |
+| `CLEANUP_OLD_IMAGES`| Removes previous images after success | `false` |
+
+## 🛠️ Setup
+1. Clone the repo: `git clone https://github.com/Homelabcraft/Watcher.git`
+2. Configure your `.env` file.
+3. Run with docker-compose: `docker-compose up -d`
