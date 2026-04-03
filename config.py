@@ -33,9 +33,6 @@ class Config:
         # Cleanup
         self.cleanup_old_images = self._parse_bool("CLEANUP_OLD_IMAGES", False)
 
-        # Notifications
-        self.notify_on_no_updates = self._parse_bool("NOTIFY_ON_NO_UPDATES", True)
-
         logger.info(f"Watcher Config: Interval={self.check_interval}s, DryRun={self.dry_run}, Cleanup={self.cleanup_old_images}")
 
     def _parse_int(self, key: str, default: int) -> int:

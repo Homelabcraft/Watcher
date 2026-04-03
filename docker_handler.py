@@ -3,6 +3,7 @@ import docker
 import docker.errors
 import socket
 from docker.types import Mount
+from docker.models.containers import Container
 from dataclasses import dataclass
 from typing import Optional, List
 
@@ -31,7 +32,7 @@ class DockerHandler:
         except:
             return None
 
-    def get_watched_containers(self) -> List:
+    def get_watched_containers(self) -> List[Container]:
         """Finds containers using internal config for filtering."""
         watched = []
         try:
@@ -51,12 +52,12 @@ class DockerHandler:
             logger.error(f"Error listing containers: {e}")
             return []
 
-    def get_image_ref(self, container) -> Optional[str]:
+    def get_image_ref(self, container: Container) -> Optional[str]:
         for t in container.image.tags:
             if t.endswith(':latest'): return t
         return None
 
-    def check_for_update(self, container) -> str:
+    def check_for_update(self, container: Container) -> str:
         if self.dry_run: return "skipped_dry_run"
         ref = self.get_image_ref(container)
         if not ref: return "error"
@@ -73,7 +74,7 @@ class DockerHandler:
             logger.error(f"Pull failed for {container.name}: {e}")
             return "error"
 
-    def get_recreation_plan(self, container) -> dict:
+    def get_recreation_plan(self, container: Container) -> dict:
         container.reload()
         attrs = container.attrs
         config = attrs.get('Config', {})
@@ -101,7 +102,7 @@ class DockerHandler:
 
         # 2. Mounts: Use Mount objects, skip anonymous
         mount_objects = []
-        for m in attrs.get('Mounts', []):
+        for m in (attrs.get('Mounts') or []):
             m_type = m.get('Type')
             if m_type not in ('bind', 'volume'): continue
             target = m.get('Destination')
@@ -142,13 +143,13 @@ class DockerHandler:
                 "read_only": host_config.get('ReadonlyRootfs', False),
                 "cap_add": host_config.get('CapAdd'),
                 "cap_drop": host_config.get('CapDrop'),
-                "devices": [f"{d['PathOnHost']}:{d['PathInContainer']}:{d.get('CgroupPermissions', 'rwm')}" for d in host_config.get('Devices', []) if 'PathOnHost' in d],
-                "extra_hosts": {eh.split(':', 1)[0]: eh.split(':', 1)[1] for eh in host_config.get('ExtraHosts', []) if ':' in eh},
+                "devices": [f"{d['PathOnHost']}:{d['PathInContainer']}:{d.get('CgroupPermissions', 'rwm')}" for d in (host_config.get('Devices') or []) if 'PathOnHost' in d],
+                "extra_hosts": {eh.split(':', 1)[0]: eh.split(':', 1)[1] for eh in (host_config.get('ExtraHosts') or []) if ':' in eh},
                 "dns": host_config.get('Dns'),
                 "healthcheck": healthcheck,
                 "detach": True
             },
-            "networks": attrs.get('NetworkSettings', {}).get('Networks', {})
+            "networks": attrs.get('NetworkSettings', {}).get('Networks') or {}
         }
 
     def recreate(self, name: str, plan: dict):
@@ -185,11 +186,17 @@ class DockerHandler:
                 if net_name == primary_net_name: continue
                 try:
                     network = self.client.networks.get(net_name)
+                    network.reload()
+                    
+                    if any(c.id == new.id for c in network.containers):
+                        continue
+
                     network.connect(new, aliases=net_config.get('Aliases'), 
                                     ipv4_address=net_config.get('IPAddress') if net_config.get('IPAddress') else None)
+                except docker.errors.APIError as e:
+                    logger.warning(f"Net-Connect API error for {net_name}: {e}")
                 except Exception as e:
-                    if "already exists" not in str(e).lower():
-                        logger.warning(f"Net-Connect error for {net_name}: {e}")
+                    logger.warning(f"Net-Connect error for {net_name}: {e}")
             
             new.start()
             return new

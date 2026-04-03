@@ -8,6 +8,7 @@ from config import Config
 from discord_notifier import DiscordNotifier
 from docker_handler import DockerHandler, RollbackContext
 from health_monitor import HealthMonitor
+from docker.models.containers import Container
 
 # Logger setup
 logging.basicConfig(
@@ -30,11 +31,13 @@ class WatcherService:
         self.notifier = DiscordNotifier(self.config.discord_webhook_url)
         self.health = HealthMonitor(self.client)
 
-    def process_container(self, container):
+    def process_container(self, container: Container):
         """Standard production update lifecycle with deepcopy protection."""
         name = container.name
         old_id = container.image.id
         ref = self.docker.get_image_ref(container)
+        rb_ctx = None
+        recreate_started = False
         
         try:
             # 1. Update Detection
@@ -56,12 +59,10 @@ class WatcherService:
             self.notifier.notify_update(name, ref, old_id, new_id)
 
             # 3. Execution
-            if self.config.dry_run:
-                logger.info(f"[DRY] Would recreate {name} -> {new_id[:12]}")
-                return
-
             logger.info(f"Updating {name}...")
             self.notifier.notify_recreation_started(name)
+            
+            recreate_started = True
             self.docker.recreate(name, plan)
 
             # 4. Verification
@@ -80,6 +81,9 @@ class WatcherService:
         except Exception as e:
             logger.error(f"Error processing {name}: {e}")
             self.notifier.notify_failure(name, f"Unexpected error: {str(e)}")
+            if rb_ctx and recreate_started:
+                logger.info(f"Attempting rollback for {name} after execution error...")
+                self.perform_rollback(rb_ctx)
 
     def perform_rollback(self, ctx: RollbackContext):
         """Rollback using bit-perfect Image ID and deepcopied plan."""
@@ -91,10 +95,10 @@ class WatcherService:
             
             self.docker.recreate(ctx.name, rb_plan)
             
-            if self.health.is_healthy(ctx.name):
+            if self.health.wait_for_health(ctx.name, self.config.health_check_retries, self.config.health_check_delay):
                 self.notifier.notify_rollback(ctx.name, True, f"Recovered image `{ctx.old_image_id[:12]}`.")
             else:
-                self.notifier.notify_rollback(ctx.name, False, "Container stopped after rollback attempt.")
+                self.notifier.notify_rollback(ctx.name, False, "Container stopped or unhealthy after rollback attempt.")
         except Exception as e:
             logger.error(f"CRITICAL ROLLBACK FAILURE: {e}")
             self.notifier.notify_rollback(ctx.name, False, f"Critical error during rollback: {str(e)}")

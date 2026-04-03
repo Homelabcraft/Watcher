@@ -27,7 +27,10 @@ class HealthMonitor:
                 return False
             
             return True
-        except:
+        except docker.errors.NotFound:
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking health state for {name}: {e}")
             return False
 
     def wait_for_health(self, name: str, retries: int, delay: int) -> bool:

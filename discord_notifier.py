@@ -38,6 +38,9 @@ class DiscordNotifier:
     def notify_success(self, name: str, image: str):
         self.send_event(f"Success: {name}", f"Updated to latest `{image}`.", color=0x2ecc71)
 
+    def notify_recreation_started(self, name: str):
+        self.send_event(f"Updating: {name}", "Recreating container...", color=0x3498db)
+
     def notify_failure(self, name: str, reason: str):
         self.send_event(f"FAILED: {name}", f"Reason: {reason}", color=0xe74c3c)
 
