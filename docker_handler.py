@@ -24,9 +24,10 @@ class DockerHandler:
         except:
             return None
 
-    def get_watched_containers(self) -> List[Container]:
-        """Finds containers using internal config for filtering."""
-        watched = []
+    def get_watched_containers(self) -> tuple[List[Container], List[Container]]:
+        """Finds containers using internal config for filtering. Returns (auto_update, monitor_only)."""
+        auto_update = []
+        monitor_only = []
         try:
             for c in self.client.containers.list():
                 labels = c.labels or {}
@@ -37,14 +38,23 @@ class DockerHandler:
                 tags = c.image.tags
                 if not any(t.endswith(':latest') for t in tags): continue
                 
+                enable_label = labels.get(self.config.watch_label_key)
+                
                 if self.config and self.config.watch_by_label:
-                    if labels.get(self.config.watch_label_key) != self.config.watch_label_value:
-                        continue
-                watched.append(c)
-            return watched
+                    if enable_label == self.config.watch_label_value:
+                        auto_update.append(c)
+                    elif enable_label != "false":
+                        monitor_only.append(c)
+                else:
+                    if enable_label == "false":
+                        monitor_only.append(c)
+                    else:
+                        auto_update.append(c)
+
+            return auto_update, monitor_only
         except Exception as e:
             logger.error(f"Error listing containers: {e}")
-            return []
+            return [], []
 
     def get_image_ref(self, container: Container) -> Optional[str]:
         for t in container.image.tags:

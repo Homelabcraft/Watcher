@@ -30,7 +30,7 @@ class WatcherService:
         self.notifier = DiscordNotifier(self.config.discord_webhook_url)
         self.health = HealthMonitor(self.client)
 
-    def process_container(self, container: Container) -> str:
+    def process_container(self, container: Container, auto_update: bool) -> str:
         """Standard production update lifecycle with rename backup protection."""
         name = container.name
         old_id = container.image.id
@@ -47,6 +47,11 @@ class WatcherService:
             if status == "error":
                 self.notifier.notify_failure(name, "Update check failed.")
                 return "failed"
+
+            # Hybrid Mode: If not auto_update, we stop here and just report
+            if not auto_update:
+                logger.info(f"Update available for {name}, but auto-update is not enabled. Reporting only.")
+                return "reported"
 
             # 2. State Capture
             container.reload()
@@ -151,17 +156,24 @@ class WatcherService:
 
     def run_cycle(self):
         logger.info("--- Cycle Start ---")
-        watched = self.docker.get_watched_containers()
-        summary = {"updated": [], "failed": [], "rolled_back": []}
+        auto_update, monitor_only = self.docker.get_watched_containers()
+        summary = {"updated": [], "failed": [], "rolled_back": [], "reported": []}
         
-        for c in watched:
-            status = self.process_container(c)
+        for c in auto_update:
+            status = self.process_container(c, auto_update=True)
             if status == "updated":
                 summary["updated"].append(c.name)
             elif status == "failed":
                 summary["failed"].append(c.name)
             elif status == "rolled_back":
                 summary["rolled_back"].append(c.name)
+                
+        for c in monitor_only:
+            status = self.process_container(c, auto_update=False)
+            if status == "reported":
+                summary["reported"].append(c.name)
+            elif status == "failed":
+                summary["failed"].append(c.name)
                 
         if summary["updated"]:
             self.restart_dependents(summary["updated"])

@@ -31,7 +31,7 @@ class TestWatcherService(unittest.TestCase):
         self.service.docker.remove_backup = MagicMock()
         self.service.health.wait_for_health = MagicMock(return_value=True)
         
-        status = self.service.process_container(mock_container)
+        status = self.service.process_container(mock_container, auto_update=True)
         
         self.assertEqual(status, "updated")
         self.service.docker.recreate.assert_called_once()
@@ -50,7 +50,7 @@ class TestWatcherService(unittest.TestCase):
         self.service.health.wait_for_health = MagicMock(return_value=False)
         self.service.perform_rollback = MagicMock()
         
-        status = self.service.process_container(mock_container)
+        status = self.service.process_container(mock_container, auto_update=True)
         
         self.assertEqual(status, "rolled_back")
         self.service.perform_rollback.assert_called_once_with("test_app", "old_image_hash")

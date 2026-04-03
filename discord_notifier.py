@@ -39,10 +39,12 @@ class DiscordNotifier:
         self.send_event(title, detail, color=color)
 
     def notify_summary_report(self, summary: dict):
-        if not summary["updated"] and not summary["failed"] and not summary["rolled_back"]:
+        if not summary["updated"] and not summary["failed"] and not summary["rolled_back"] and not summary.get("reported"):
             return
 
         lines = ["📊 **Watcher Scan Summary**"]
+        if summary.get("reported"):
+            lines.append(f"👀 **Updates Available (Not Auto-Updated):** {', '.join(summary['reported'])}")
         if summary["updated"]:
             lines.append(f"✅ **Updated:** {', '.join(summary['updated'])}")
         if summary["failed"]:
