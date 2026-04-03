@@ -4,17 +4,9 @@ import docker.errors
 import socket
 from docker.types import Mount
 from docker.models.containers import Container
-from dataclasses import dataclass
 from typing import Optional, List
 
 logger = logging.getLogger('Watcher.Docker')
-
-@dataclass
-class RollbackContext:
-    name: str
-    old_image_id: str
-    image_ref: str
-    plan: dict
 
 class DockerHandler:
     """Hardened Docker API handler with SDK compliance and self-protection."""
@@ -175,7 +167,13 @@ class DockerHandler:
         try:
             try:
                 old = self.client.containers.get(name)
-                old.stop(timeout=15); old.remove()
+                old.stop(timeout=15)
+                backup_name = f"{name}_backup"
+                try:
+                    existing = self.client.containers.get(backup_name)
+                    existing.remove(force=True)
+                except docker.errors.NotFound: pass
+                old.rename(backup_name)
             except docker.errors.NotFound: pass
 
             logger.info(f"Creating {name}...")
@@ -203,6 +201,18 @@ class DockerHandler:
         except Exception as e:
             logger.error(f"RECREATION FAILED for {name}: {e}")
             raise
+
+    def remove_backup(self, name: str):
+        """Removes the backup container after a successful update."""
+        backup_name = f"{name}_backup"
+        try:
+            backup = self.client.containers.get(backup_name)
+            backup.remove(force=True)
+            logger.info(f"Removed backup container {backup_name}")
+        except docker.errors.NotFound:
+            pass
+        except Exception as e:
+            logger.warning(f"Failed to remove backup {backup_name}: {e}")
 
     def remove_image(self, image_id: str):
         """Removes an old image if possible."""

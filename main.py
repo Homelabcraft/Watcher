@@ -2,11 +2,10 @@ import time
 import logging
 import docker
 import sys
-import copy
 
 from config import Config
 from discord_notifier import DiscordNotifier
-from docker_handler import DockerHandler, RollbackContext
+from docker_handler import DockerHandler
 from health_monitor import HealthMonitor
 from docker.models.containers import Container
 
@@ -31,36 +30,31 @@ class WatcherService:
         self.notifier = DiscordNotifier(self.config.discord_webhook_url)
         self.health = HealthMonitor(self.client)
 
-    def process_container(self, container: Container):
-        """Standard production update lifecycle with deepcopy protection."""
+    def process_container(self, container: Container) -> str:
+        """Standard production update lifecycle with rename backup protection."""
         name = container.name
         old_id = container.image.id
         ref = self.docker.get_image_ref(container)
-        rb_ctx = None
         recreate_started = False
         
         try:
             # 1. Update Detection
             status = self.docker.check_for_update(container)
-            if status == "no_update": return
+            if status == "no_update": return "no_update"
             if status == "skipped_dry_run":
                 logger.info(f"[DRY] Would check updates for {name}")
-                return
+                return "skipped_dry_run"
             if status == "error":
                 self.notifier.notify_failure(name, "Update check failed.")
-                return
+                return "failed"
 
-            # 2. State Capture (Critical: use deepcopy for rollback context)
+            # 2. State Capture
             container.reload()
-            new_id = self.client.images.get(ref).id
             plan = self.docker.get_recreation_plan(container)
-            rb_ctx = RollbackContext(name, old_id, ref, copy.deepcopy(plan))
-            
-            self.notifier.notify_update(name, ref, old_id, new_id)
 
             # 3. Execution
             logger.info(f"Updating {name}...")
-            self.notifier.notify_recreation_started(name)
+            self.notifier.notify_recreation_started(name, ref)
             
             recreate_started = True
             self.docker.recreate(name, plan)
@@ -68,46 +62,71 @@ class WatcherService:
             # 4. Verification
             if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                 logger.info(f"Success: {name}")
-                self.notifier.notify_success(name, ref)
+                self.docker.remove_backup(name)
                 
                 # 5. Cleanup (Only after success)
                 if self.config.cleanup_old_images:
                     self.docker.remove_image(old_id)
+                return "updated"
             else:
                 logger.error(f"Health failed: {name}. Rolling back...")
                 self.notifier.notify_failure(name, "Unhealthy post-update.")
-                self.perform_rollback(rb_ctx)
+                self.perform_rollback(name)
+                return "rolled_back"
 
         except Exception as e:
             logger.error(f"Error processing {name}: {e}")
             self.notifier.notify_failure(name, f"Unexpected error: {str(e)}")
-            if rb_ctx and recreate_started:
+            if recreate_started:
                 logger.info(f"Attempting rollback for {name} after execution error...")
-                self.perform_rollback(rb_ctx)
+                self.perform_rollback(name)
+            return "failed"
 
-    def perform_rollback(self, ctx: RollbackContext):
-        """Rollback using bit-perfect Image ID and deepcopied plan."""
-        logger.warning(f"ROLLBACK for {ctx.name} to {ctx.old_image_id[:12]}")
+    def perform_rollback(self, name: str):
+        """Rollback using the saved backup container."""
+        logger.warning(f"ROLLBACK for {name}")
         try:
-            # Ensure we work on a copy to prevent side effects
-            rb_plan = copy.deepcopy(ctx.plan)
-            rb_plan["create_args"]["image"] = ctx.old_image_id
-            
-            self.docker.recreate(ctx.name, rb_plan)
-            
-            if self.health.wait_for_health(ctx.name, self.config.health_check_retries, self.config.health_check_delay):
-                self.notifier.notify_rollback(ctx.name, True, f"Recovered image `{ctx.old_image_id[:12]}`.")
+            # 1. Delete failed new container
+            try:
+                failed_new = self.client.containers.get(name)
+                failed_new.remove(force=True)
+            except docker.errors.NotFound: pass
+
+            # 2. Restore backup
+            backup_name = f"{name}_backup"
+            try:
+                backup = self.client.containers.get(backup_name)
+                backup.rename(name)
+                backup.start()
+                logger.info(f"Restored {name} from backup.")
+            except docker.errors.NotFound:
+                logger.error(f"Backup {backup_name} not found. Rollback failed.")
+                self.notifier.notify_rollback(name, False, "Backup container not found.")
+                return
+
+            if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                self.notifier.notify_rollback(name, True, "Restored from backup.")
             else:
-                self.notifier.notify_rollback(ctx.name, False, "Container stopped or unhealthy after rollback attempt.")
+                self.notifier.notify_rollback(name, False, "Container stopped or unhealthy after rollback attempt.")
         except Exception as e:
             logger.error(f"CRITICAL ROLLBACK FAILURE: {e}")
-            self.notifier.notify_rollback(ctx.name, False, f"Critical error during rollback: {str(e)}")
+            self.notifier.notify_rollback(name, False, f"Critical error during rollback: {str(e)}")
 
     def run_cycle(self):
         logger.info("--- Cycle Start ---")
         watched = self.docker.get_watched_containers()
+        summary = {"updated": [], "failed": [], "rolled_back": []}
+        
         for c in watched:
-            self.process_container(c)
+            status = self.process_container(c)
+            if status == "updated":
+                summary["updated"].append(c.name)
+            elif status == "failed":
+                summary["failed"].append(c.name)
+            elif status == "rolled_back":
+                summary["rolled_back"].append(c.name)
+                
+        self.notifier.notify_summary_report(summary)
         logger.info("--- Cycle End ---")
 
     def start(self):
