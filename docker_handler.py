@@ -31,6 +31,7 @@ class DockerHandler:
             for c in self.client.containers.list():
                 if self.self_id and c.id == self.self_id: continue
                 if self.config and c.name in self.config.exclude_names: continue
+                if c.labels.get("watcher.self") == "true": continue
 
                 tags = c.image.tags
                 if not any(t.endswith(':latest') for t in tags): continue

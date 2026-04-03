@@ -120,6 +120,27 @@ class WatcherService:
             logger.error(f"CRITICAL ROLLBACK FAILURE: {e}")
             self.notifier.notify_rollback(name, False, f"Critical error during rollback: {str(e)}")
 
+    def restart_dependents(self, updated_name: str):
+        """Restarts containers that explicitly depend on the updated container."""
+        try:
+            for c in self.client.containers.list():
+                # Do not restart the watcher itself
+                if c.name in self.config.exclude_names or c.labels.get("watcher.self") == "true":
+                    continue
+                
+                depends_on = c.labels.get(self.config.depends_on_label_key, "")
+                depends_list = [d.strip() for d in depends_on.split(",") if d.strip()]
+                
+                if updated_name in depends_list:
+                    logger.info(f"Restarting dependent container {c.name}...")
+                    try:
+                        c.restart(timeout=15)
+                        logger.info(f"Successfully restarted dependent {c.name}.")
+                    except Exception as e:
+                        logger.error(f"Failed to restart dependent {c.name}: {e}")
+        except Exception as e:
+            logger.error(f"Error checking dependents for {updated_name}: {e}")
+
     def run_cycle(self):
         logger.info("--- Cycle Start ---")
         watched = self.docker.get_watched_containers()
@@ -129,6 +150,7 @@ class WatcherService:
             status = self.process_container(c)
             if status == "updated":
                 summary["updated"].append(c.name)
+                self.restart_dependents(c.name)
             elif status == "failed":
                 summary["failed"].append(c.name)
             elif status == "rolled_back":

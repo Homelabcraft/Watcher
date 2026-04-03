@@ -24,7 +24,13 @@ class Config:
         self.watch_label_value = os.getenv("WATCH_LABEL_VALUE", "true")
         
         # Self-Protection & Exclusions
-        self.exclude_names = [n.strip() for n in os.getenv("EXCLUDE_CONTAINER_NAMES", "").split(",") if n.strip()]
+        exclude_env = os.getenv("EXCLUDE_CONTAINER_NAMES", "")
+        self.exclude_names = [n.strip() for n in exclude_env.split(",") if n.strip()]
+        if "watcher" not in self.exclude_names:
+            self.exclude_names.append("watcher")
+
+        # Dependency Restarts
+        self.depends_on_label_key = os.getenv("DEPENDS_ON_LABEL_KEY", "watcher.depends_on")
 
         # Health Check
         self.health_check_retries = self._parse_int("HEALTH_CHECK_RETRIES", 12)
