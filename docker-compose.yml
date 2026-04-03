@@ -10,4 +10,6 @@ services:
       - CHECK_INTERVAL=${CHECK_INTERVAL:-300}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - DRY_RUN=${DRY_RUN:-false}
+    labels:
+      - "watcher.self=true" # Explicitly protects the watcher from self-updating
     restart: unless-stopped

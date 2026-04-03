@@ -29,15 +29,16 @@ class DockerHandler:
         watched = []
         try:
             for c in self.client.containers.list():
+                labels = c.labels or {}
                 if self.self_id and c.id == self.self_id: continue
                 if self.config and c.name in self.config.exclude_names: continue
-                if c.labels.get("watcher.self") == "true": continue
+                if labels.get("watcher.self") == "true": continue
 
                 tags = c.image.tags
                 if not any(t.endswith(':latest') for t in tags): continue
                 
                 if self.config and self.config.watch_by_label:
-                    if c.labels.get(self.config.watch_label_key) != self.config.watch_label_value:
+                    if labels.get(self.config.watch_label_key) != self.config.watch_label_value:
                         continue
                 watched.append(c)
             return watched
