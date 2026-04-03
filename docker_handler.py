@@ -43,7 +43,7 @@ class DockerHandler:
                 if self.config and self.config.watch_by_label:
                     if enable_label == self.config.watch_label_value:
                         auto_update.append(c)
-                    elif enable_label != "false":
+                    else:
                         monitor_only.append(c)
                 else:
                     if enable_label == "false":
