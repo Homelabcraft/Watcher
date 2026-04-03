@@ -71,7 +71,7 @@ class WatcherService:
             else:
                 logger.error(f"Health failed: {name}. Rolling back...")
                 self.notifier.notify_failure(name, "Unhealthy post-update.")
-                self.perform_rollback(name)
+                self.perform_rollback(name, old_id)
                 return "rolled_back"
 
         except Exception as e:
@@ -79,18 +79,26 @@ class WatcherService:
             self.notifier.notify_failure(name, f"Unexpected error: {str(e)}")
             if recreate_started:
                 logger.info(f"Attempting rollback for {name} after execution error...")
-                self.perform_rollback(name)
+                self.perform_rollback(name, old_id)
             return "failed"
 
-    def perform_rollback(self, name: str):
+    def perform_rollback(self, name: str, old_id: str):
         """Rollback using the saved backup container."""
         logger.warning(f"ROLLBACK for {name}")
         try:
-            # 1. Delete failed new container
+            # 1. Inspect current container under target name
             try:
-                failed_new = self.client.containers.get(name)
-                failed_new.remove(force=True)
-            except docker.errors.NotFound: pass
+                current_container = self.client.containers.get(name)
+                if current_container.image.id == old_id:
+                    logger.info(f"Original container {name} is still in place (rename likely failed). Starting it...")
+                    current_container.start()
+                    self.notifier.notify_rollback(name, True, "Original container recovered (update didn't complete).")
+                    return
+                else:
+                    logger.info(f"Removing failed new container {name}...")
+                    current_container.remove(force=True)
+            except docker.errors.NotFound:
+                pass # No container under this name, proceed to restore backup
 
             # 2. Restore backup
             backup_name = f"{name}_backup"

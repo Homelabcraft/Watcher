@@ -27,7 +27,7 @@ class Config:
         self.exclude_names = [n.strip() for n in os.getenv("EXCLUDE_CONTAINER_NAMES", "").split(",") if n.strip()]
 
         # Health Check
-        self.health_check_retries = self._parse_int("HEALTH_CHECK_RETRIES", 3)
+        self.health_check_retries = self._parse_int("HEALTH_CHECK_RETRIES", 12)
         self.health_check_delay = self._parse_int("HEALTH_CHECK_DELAY", 10)
 
         # Cleanup
