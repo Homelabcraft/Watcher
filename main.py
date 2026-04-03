@@ -125,7 +125,7 @@ class WatcherService:
         if not updated_names:
             return
             
-        containers_to_restart = set()
+        containers_to_restart = {}
         try:
             for c in self.client.containers.list():
                 labels = c.labels or {}
@@ -137,9 +137,9 @@ class WatcherService:
                 depends_list = [d.strip() for d in depends_on.split(",") if d.strip()]
                 
                 if any(u in depends_list for u in updated_names):
-                    containers_to_restart.add(c)
+                    containers_to_restart[c.id] = c
                     
-            for c in containers_to_restart:
+            for c in containers_to_restart.values():
                 logger.info(f"Restarting dependent container {c.name}...")
                 try:
                     c.restart(timeout=15)
