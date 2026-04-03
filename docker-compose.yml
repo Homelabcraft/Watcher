@@ -7,7 +7,7 @@ services:
     env_file:
       - .env
     environment:
-      - CHECK_INTERVAL=${CHECK_INTERVAL:-300}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-86400}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - DRY_RUN=${DRY_RUN:-false}
     labels:

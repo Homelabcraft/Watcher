@@ -10,7 +10,7 @@ class Config:
     """Production configuration for Watcher."""
     def __init__(self):
         # Operational
-        self.check_interval = self._parse_int("CHECK_INTERVAL", 300)
+        self.check_interval = self._parse_int("CHECK_INTERVAL", 86400)
         self.discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
         self.dry_run = self._parse_bool("DRY_RUN", False)
         

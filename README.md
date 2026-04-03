@@ -17,7 +17,7 @@
 ## ⚙️ Configuration
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `CHECK_INTERVAL` | Seconds between update checks | `300` |
+| `CHECK_INTERVAL` | Seconds between update checks | `86400` |
 | `DISCORD_WEBHOOK_URL` | Your Discord channel webhook | `None` |
 | `DRY_RUN` | If `true`, only checks but doesn't restart | `false` |
 | `CLEANUP_OLD_IMAGES`| Removes previous images after success | `false` |
