@@ -52,5 +52,93 @@ class TestRollbackBug(unittest.TestCase):
         except Exception as e:
             self.fail(f"perform_rollback() raised {type(e).__name__} unexpectedly: {e}")
 
+    def test_recreate_retry_on_user_error_success(self):
+        """
+        Verify that recreation retries without 'user' if the first attempt fails 
+        with a user-resolution error.
+        """
+        plan = {
+            "create_args": {"name": "test", "image": "img", "user": "root"},
+            "networks": {}
+        }
+        
+        # Create a mock container that fails to start once
+        mock_container = MagicMock()
+        # First call fails, second succeeds
+        mock_container.start.side_effect = [
+            Exception("unable to find user root: no matching entries in passwd file"),
+            None
+        ]
+        
+        # Setup create to return the mock container twice
+        self.mock_client.containers.create.return_value = mock_container
+        
+        # This should call create twice and return the mock_container on the second try
+        result = self.service.docker.recreate("test", plan)
+        
+        self.assertEqual(result, mock_container)
+        # Verify user was popped from the plan for the second attempt
+        create_calls = self.mock_client.containers.create.call_args_list
+        self.assertEqual(len(create_calls), 2)
+        
+        # First call should have user='root'
+        self.assertEqual(create_calls[0][1]['user'], 'root')
+        # Second call should NOT have 'user'
+        self.assertNotIn('user', create_calls[1][1])
+        
+        # Verify first container was removed
+        mock_container.remove.assert_called()
+
+    def test_recreate_no_retry_on_other_error(self):
+        """Verify that recreation does NOT retry on non-user errors."""
+        plan = {
+            "create_args": {"name": "test", "image": "img", "user": "root"},
+            "networks": {}
+        }
+        
+        mock_container = MagicMock()
+        mock_container.start.side_effect = Exception("Some random docker error")
+        self.mock_client.containers.create.return_value = mock_container
+        
+        with self.assertRaisesRegex(Exception, "Some random docker error"):
+            self.service.docker.recreate("test", plan)
+            
+        # Should only have called create once
+        self.assertEqual(self.mock_client.containers.create.call_count, 1)
+
+    def test_get_image_ref_from_config(self):
+        """Verify that get_image_ref uses Config.Image if RepoTags are empty."""
+        mock_container = MagicMock()
+        mock_container.attrs = {'Config': {'Image': 'repo/app:latest'}}
+        mock_container.image.tags = [] # Empty RepoTags
+        
+        ref = self.service.docker.get_image_ref(mock_container)
+        self.assertEqual(ref, 'repo/app:latest')
+
+    def test_get_image_ref_skip_non_latest(self):
+        """Verify that get_image_ref skips images without :latest."""
+        mock_container = MagicMock()
+        mock_container.attrs = {'Config': {'Image': 'repo/app:1.2.3'}}
+        mock_container.image.tags = ['repo/app:1.2.3']
+        
+        ref = self.service.docker.get_image_ref(mock_container)
+        self.assertIsNone(ref)
+
+    def test_get_watched_containers_empty_tags_but_valid_config(self):
+        """Verify that containers with empty image tags but valid Config.Image are selected."""
+        c = MagicMock()
+        c.name = "crafty"
+        c.id = "id1"
+        c.labels = {}
+        c.attrs = {'Config': {'Image': 'crafty:latest'}}
+        c.image.tags = [] # The reported bug case
+        
+        self.mock_client.containers.list.return_value = [c]
+        self.service.config.watch_by_label = False # Default mode
+        
+        auto, monitor = self.service.docker.get_watched_containers()
+        self.assertIn(c, auto)
+        self.assertEqual(len(auto), 1)
+
 if __name__ == '__main__':
     unittest.main()

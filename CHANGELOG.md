@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-04-07
+### Fixed
+- **User-Resolution Fallback:** Containers failing to start with a configured user (e.g. `root`) now perform a single retry without the user configuration. This resolves issues with minimalist/distroless images that lack a passwd file.
+- **Container Selection (Discovery):** Fixed a bug where containers with empty local image tags (RepoTags=[]) were skipped. Discovery now correctly prioritizes the container's original `Config.Image` reference.
+- **Defensive Rollback:** Hardened the rollback lifecycle against `IndexError` and improved overall diagnostic logging.
+- **SDK Stability:** Pruned `None`-values from Docker create arguments to prevent SDK-level inconsistencies.
+
 ## [1.4.0] - 2026-04-07
 ### Added
 - **Hardened Recreation:** Support for `Ulimits`, `Sysctls`, `LogConfig`, `ShmSize`, `IpcMode`, and `PidMode`.
