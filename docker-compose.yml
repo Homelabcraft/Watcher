@@ -1,0 +1,16 @@
+services:
+  watcher:
+    build: .
+    container_name: watcher
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file:
+      - .env
+    # Note: Environment variables in .env take precedence over these defaults
+    environment:
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-86400}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - DRY_RUN=${DRY_RUN:-false}
+    labels:
+      - "watcher.self=true"
+    restart: unless-stopped
