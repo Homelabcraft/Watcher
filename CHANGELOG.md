@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.4.1] - 2026-04-07
+## [1.4.2] - 2026-04-07
 ### Fixed
 - **User-Resolution Fallback:** Containers failing to start with a configured user (e.g. `root`) now perform a single retry without the user configuration. This resolves issues with minimalist/distroless images that lack a passwd file.
 - **Container Selection (Discovery):** Fixed a bug where containers with empty local image tags (RepoTags=[]) were skipped. Discovery now correctly prioritizes the container's original `Config.Image` reference.

@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat-square&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v1.4.1-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
+[![Version](https://img.shields.io/badge/version-v1.4.2-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
 
 **Watcher** is a high-integrity, production-grade container orchestration utility designed for automated image lifecycle management. Unlike standard update tools, Watcher prioritizes **system stability and data persistence** through a sophisticated *Rename-Backup-Strategy* and multi-stage health validation.
 
