@@ -98,6 +98,7 @@ class WatcherService:
             # 1. Inspect current container under target name
             try:
                 current_container = self.client.containers.get(name)
+                # Check image ID to see if update actually happened
                 if current_container.image.id == old_id:
                     logger.info(f"Original container {name} is still in place (rename likely failed). Starting it...")
                     current_container.start()
@@ -107,27 +108,39 @@ class WatcherService:
                     logger.info(f"Removing failed new container {name}...")
                     current_container.remove(force=True)
             except docker.errors.NotFound:
-                pass # No container under this name, proceed to restore backup
+                logger.debug(f"No container found with name {name} during rollback, proceeding to restore backup.")
+            except Exception as e:
+                logger.error(f"Error handling current container during rollback: {e}")
 
             # 2. Restore backup
             backup_name = f"{name}_backup"
             try:
                 backup = self.client.containers.get(backup_name)
-                backup.rename(name)
-                backup.start()
-                logger.info(f"Restored {name} from backup.")
+                logger.info(f"Found backup {backup_name}. Restoring...")
+                
+                # Perform rename and start defensively
+                try:
+                    backup.rename(name)
+                    backup.start()
+                    logger.info(f"Restored {name} from backup.")
+                except Exception as e:
+                    logger.error(f"Failed to rename or start backup container {backup_name}: {e}")
+                    self.notifier.notify_rollback(name, False, f"Critical failure: Could not rename or start backup: {str(e)}")
+                    return
+
             except docker.errors.NotFound:
-                logger.error(f"Backup {backup_name} not found. Rollback failed.")
-                self.notifier.notify_rollback(name, False, "Backup container not found.")
+                logger.error(f"Backup {backup_name} not found. Rollback impossible.")
+                self.notifier.notify_rollback(name, False, "Rollback failed: Backup container not found.")
                 return
 
+            # 3. Final verification
             if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                 self.notifier.notify_rollback(name, True, "Restored from backup.")
             else:
                 self.notifier.notify_rollback(name, False, "Container stopped or unhealthy after rollback attempt.")
         except Exception as e:
-            logger.error(f"CRITICAL ROLLBACK FAILURE: {e}")
-            self.notifier.notify_rollback(name, False, f"Critical error during rollback: {str(e)}")
+            logger.error(f"CRITICAL ROLLBACK FAILURE for {name}: {e}")
+            self.notifier.notify_rollback(name, False, f"Unexpected error during rollback: {str(e)}")
 
     def restart_dependents(self, updated_containers: list[dict]):
         """

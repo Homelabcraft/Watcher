@@ -137,37 +137,47 @@ class DockerHandler:
         lc_raw = host_config.get('LogConfig', {})
         log_config = LogConfig(type=lc_raw.get('Type'), config=lc_raw.get('Config')) if lc_raw.get('Type') else None
 
+        create_args = {
+            "name": container.name,
+            "image": self.get_image_ref(container),
+            "hostname": config.get('Hostname'),
+            "working_dir": config.get('WorkingDir'),
+            "command": config.get('Cmd'),
+            "entrypoint": config.get('Entrypoint'),
+            "environment": config.get('Env'),
+            "labels": config.get('Labels'),
+            "ports": ports,
+            "mounts": mount_objects,
+            "restart_policy": restart_policy,
+            "network_mode": host_config.get('NetworkMode'),
+            "privileged": host_config.get('Privileged'),
+            "read_only": host_config.get('ReadonlyRootfs', False),
+            "cap_add": host_config.get('CapAdd'),
+            "cap_drop": host_config.get('CapDrop'),
+            "devices": [f"{d['PathOnHost']}:{d['PathInContainer']}:{d.get('CgroupPermissions', 'rwm')}" for d in (host_config.get('Devices') or []) if 'PathOnHost' in d],
+            "extra_hosts": {eh.split(':', 1)[0]: eh.split(':', 1)[1] for eh in (host_config.get('ExtraHosts') or []) if ':' in eh},
+            "dns": host_config.get('Dns'),
+            "healthcheck": healthcheck,
+            "sysctls": host_config.get('Sysctls'),
+            "ulimits": ulimits,
+            "log_config": log_config,
+            "shm_size": host_config.get('ShmSize'),
+            "ipc_mode": host_config.get('IpcMode'),
+            "pid_mode": host_config.get('PidMode'),
+            "detach": True
+        }
+
+        # User handling: Only set if truthy to avoid "unable to find user" errors
+        # if the image has changed or the value is explicitly empty.
+        user = config.get('User')
+        if user:
+            create_args["user"] = user
+
+        # Cleanup: Remove None values to avoid SDK issues
+        create_args = {k: v for k, v in create_args.items() if v is not None}
+
         return {
-            "create_args": {
-                "name": container.name,
-                "image": self.get_image_ref(container),
-                "hostname": config.get('Hostname'),
-                "user": config.get('User'),
-                "working_dir": config.get('WorkingDir'),
-                "command": config.get('Cmd'),
-                "entrypoint": config.get('Entrypoint'),
-                "environment": config.get('Env'),
-                "labels": config.get('Labels'),
-                "ports": ports,
-                "mounts": mount_objects,
-                "restart_policy": restart_policy,
-                "network_mode": host_config.get('NetworkMode'),
-                "privileged": host_config.get('Privileged'),
-                "read_only": host_config.get('ReadonlyRootfs', False),
-                "cap_add": host_config.get('CapAdd'),
-                "cap_drop": host_config.get('CapDrop'),
-                "devices": [f"{d['PathOnHost']}:{d['PathInContainer']}:{d.get('CgroupPermissions', 'rwm')}" for d in (host_config.get('Devices') or []) if 'PathOnHost' in d],
-                "extra_hosts": {eh.split(':', 1)[0]: eh.split(':', 1)[1] for eh in (host_config.get('ExtraHosts') or []) if ':' in eh},
-                "dns": host_config.get('Dns'),
-                "healthcheck": healthcheck,
-                "sysctls": host_config.get('Sysctls'),
-                "ulimits": ulimits,
-                "log_config": log_config,
-                "shm_size": host_config.get('ShmSize'),
-                "ipc_mode": host_config.get('IpcMode'),
-                "pid_mode": host_config.get('PidMode'),
-                "detach": True
-            },
+            "create_args": create_args,
             "networks": attrs.get('NetworkSettings', {}).get('Networks') or {}
         }
 
@@ -179,17 +189,21 @@ class DockerHandler:
         # Networking Configuration for create()
         networking_config = None
         primary_net_name = None
+        
+        # Defensive check for networks to avoid IndexError
         if nets and not str(ca.get('network_mode')).startswith('container:'):
-            primary_net_name = list(nets.keys())[0]
-            n_cfg = nets[primary_net_name]
-            networking_config = self.client.api.create_networking_config({
-                primary_net_name: self.client.api.create_endpoint_config(
-                    aliases=n_cfg.get('Aliases'),
-                    ipv4_address=n_cfg.get('IPAddress') if n_cfg.get('IPAddress') else None
-                )
-            })
-            if ca.get('network_mode') == primary_net_name:
-                ca.pop('network_mode')
+            keys = list(nets.keys())
+            if keys:
+                primary_net_name = keys[0]
+                n_cfg = nets[primary_net_name]
+                networking_config = self.client.api.create_networking_config({
+                    primary_net_name: self.client.api.create_endpoint_config(
+                        aliases=n_cfg.get('Aliases'),
+                        ipv4_address=n_cfg.get('IPAddress') if n_cfg.get('IPAddress') else None
+                    )
+                })
+                if ca.get('network_mode') == primary_net_name:
+                    ca.pop('network_mode')
 
         try:
             try:
