@@ -16,15 +16,17 @@ class HealthMonitor:
             c.reload()
             state = c.attrs.get('State', {})
             status = state.get('Status', '')
-            health = state.get('Health', {}).get('Status', 'none')
+            health_data = state.get('Health', {})
+            health = health_data.get('Status', 'none')
 
             # Container must be running
             if status != 'running': 
                 return False
             
             # If Docker healthcheck exists, it must not be unhealthy or starting
-            if health in ('unhealthy', 'starting'): 
-                return False
+            if health != 'none':
+                if health in ('unhealthy', 'starting'): 
+                    return False
             
             return True
         except docker.errors.NotFound:
@@ -43,6 +45,13 @@ class HealthMonitor:
         
         logger.info(f"Verifying health for {name} (Stability: {required_successes} successful checks required)...")
         
+        # Check if container has a native healthcheck
+        try:
+            c = self.client.containers.get(name)
+            if c.attrs.get('State', {}).get('Health', {}).get('Status', 'none') == 'none':
+                logger.warning(f"Container {name} has no native Docker healthcheck. Stability check will only verify 'running' state.")
+        except: pass
+
         # Initial wait for container startup
         time.sleep(2)
 

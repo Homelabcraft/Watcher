@@ -31,9 +31,11 @@ class DockerHandler:
         try:
             for c in self.client.containers.list():
                 labels = c.labels or {}
+                
+                # Critical Self-Protection: Skip our own container by ID, name, or specific label
                 if self.self_id and c.id == self.self_id: continue
-                if self.config and c.name in self.config.exclude_names: continue
                 if labels.get("watcher.self") == "true": continue
+                if self.config and c.name in self.config.exclude_names: continue
 
                 # Evaluate image reference via Config.Image or RepoTags
                 ref = self.get_image_ref(c)

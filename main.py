@@ -156,10 +156,15 @@ class WatcherService:
         containers_to_restart = {}
         try:
             for c in self.client.containers.list():
+                # Self-Protection already handled in discovery, but we double-check here
                 labels = c.labels or {}
                 if c.name in self.config.exclude_names or labels.get("watcher.self") == "true":
                     continue
                 
+                # Prevent restarting containers that were JUST updated in this same cycle
+                if c.name in updated_names:
+                    continue
+
                 # 1. Label-based dependency
                 depends_on = labels.get(self.config.depends_on_label_key, "")
                 depends_list = [d.strip() for d in depends_on.split(",") if d.strip()]
@@ -169,11 +174,9 @@ class WatcherService:
                 is_net_dependent = False
                 if net_mode.startswith('container:'):
                     target = net_mode.split(':', 1)[1]
-                    # Case: container:<name> - Reliable after restart
                     if target in updated_names:
                         is_net_dependent = True
                         logger.info(f"Network dependency (name) detected: {c.name} -> {target}")
-                    # Case: container:<id> - Unreliable after restart because ID changed
                     elif target in updated_ids:
                         logger.warning(
                             f"UNSUPPORTED DEPENDENCY: {c.name} references {target[:12]} via ID. "

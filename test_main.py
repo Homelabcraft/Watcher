@@ -222,6 +222,22 @@ class TestWatcherService(unittest.TestCase):
         self.assertIn(c_true, auto_update)
         self.assertIn(c_false, monitor_only)
 
+    def test_restart_dependents_skip_just_updated(self, mock_post):
+        """Verify that containers updated in the current cycle are not restarted as dependents."""
+        dep1 = MagicMock()
+        dep1.name = "just_updated"
+        dep1.id = "id1"
+        dep1.labels = {"watcher.depends_on": "other_app"}
+        dep1.attrs = {"HostConfig": {"NetworkMode": ""}}
+        
+        self.mock_client.containers.list.return_value = [dep1]
+        
+        # 'just_updated' is in the updated_containers list
+        self.service.restart_dependents([{'name': 'other_app', 'old_id': 'id_other'}, {'name': 'just_updated', 'old_id': 'id1'}])
+        
+        # Should NOT be restarted because it was just updated
+        dep1.restart.assert_not_called()
+
     def test_summary_includes_reported(self, mock_post):
         summary = {"updated": [], "failed": [], "rolled_back": [], "reported": ["app1", "app2"]}
         self.service.notifier.notify_summary_report(summary)

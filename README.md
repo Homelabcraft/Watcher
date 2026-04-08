@@ -28,6 +28,7 @@ In enterprise environments, a failed container update isn't just an inconvenienc
 *   **🔄 Intelligent Rollbacks:** Zero-data-loss recovery if the new image is unhealthy or crashes on startup.
 *   **⚖️ Hybrid Update Strategy:** Opt-in/Opt-out modes allowing you to auto-update stateless apps while only *monitoring* mission-critical databases.
 *   **🔗 Deep Dependency Management:** Support for `watcher.depends_on` labels and `NetworkMode: container:<name>` linking.
+*   **🧠 Smart Restart Protection:** Prevents infinite restart loops by deduplicating dependency triggers within the same cycle.
 *   **📊 Summary Reporting:** Professional Discord notifications with categorized results (Updated, Reported, Failed, Rolled Back).
 
 ---
