@@ -101,3 +101,6 @@ class DiscordNotifier:
             color=0x95a5a6,
             fields=fields,
         )
+
+    def notify_shutdown(self, reason: str = "Stopped by user (Ctrl+C)."):
+        self.send_event("Watcher stopped", reason, color=0x7f8c8d)

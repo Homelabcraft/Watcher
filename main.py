@@ -245,6 +245,7 @@ class WatcherService:
                 time.sleep(self.config.check_interval)
         except KeyboardInterrupt:
             logger.info("Stopping...")
+            self.notifier.notify_shutdown()
         except Exception as e:
             logger.critical(f"Crashed: {e}")
 

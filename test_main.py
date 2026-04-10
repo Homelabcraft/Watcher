@@ -304,6 +304,13 @@ class TestDiscordNotifier(unittest.TestCase):
         self.assertIn("Scan interval", field_names)
         self.assertIn("my-host", str(embed["fields"]))
 
+    def test_notify_shutdown_embed(self, mock_post):
+        DiscordNotifier("http://mock").notify_shutdown("Custom stop reason")
+        mock_post.assert_called_once()
+        embed = mock_post.call_args[1]["json"]["embeds"][0]
+        self.assertIn("stopped", embed["title"].lower())
+        self.assertIn("Custom stop reason", embed["description"])
+
 
 if __name__ == '__main__':
     unittest.main()
