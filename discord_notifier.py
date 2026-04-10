@@ -38,6 +38,22 @@ class DiscordNotifier:
             color=0x27ae60,
         )
 
+    def notify_dependents_restarted(
+        self,
+        restarted: list[str],
+        failures: list[tuple[str, str]],
+    ):
+        """Summarizes dependent container restarts after an update cycle."""
+        if not restarted and not failures:
+            return
+        lines = []
+        if restarted:
+            lines.append(f"**Restarted:** {', '.join(restarted)}")
+        if failures:
+            for name, err in failures:
+                lines.append(f"**Failed {name}:** {err}")
+        self.send_event("Dependent restarts", "\n".join(lines), color=0x1abc9c)
+
     def notify_failure(self, name: str, reason: str):
         self.send_event(f"FAILED: {name}", f"Reason: {reason}", color=0xe74c3c)
 

@@ -143,14 +143,18 @@ class WatcherService:
             logger.error(f"CRITICAL ROLLBACK FAILURE for {name}: {e}")
             self.notifier.notify_rollback(name, False, f"Unexpected error during rollback: {str(e)}")
 
-    def restart_dependents(self, updated_containers: list[dict]):
+    def restart_dependents(self, updated_containers: list[dict]) -> tuple[list[str], list[tuple[str, str]]]:
         """
         Restarts containers that explicitly depend on the updated containers via labels
         or NetworkMode.
+        Returns (successfully_restarted_names, failed_restarts as (name, error) tuples).
         """
         if not updated_containers:
-            return
-            
+            return [], []
+
+        restarted: list[str] = []
+        failures: list[tuple[str, str]] = []
+
         updated_names = [u['name'] for u in updated_containers]
         updated_ids = [u['old_id'] for u in updated_containers]
         
@@ -192,10 +196,14 @@ class WatcherService:
                 try:
                     c.restart(timeout=15)
                     logger.info(f"Successfully restarted dependent {c.name}.")
+                    restarted.append(c.name)
                 except Exception as e:
                     logger.error(f"Failed to restart dependent {c.name}: {e}")
+                    failures.append((c.name, str(e)))
         except Exception as e:
             logger.error(f"Error checking dependents: {e}")
+
+        return restarted, failures
 
     def run_cycle(self):
         logger.info("--- Cycle Start ---")
@@ -221,8 +229,9 @@ class WatcherService:
                 summary["failed"].append(c.name)
                 
         if updated_info:
-            self.restart_dependents(updated_info)
-            
+            restarted, dep_failures = self.restart_dependents(updated_info)
+            self.notifier.notify_dependents_restarted(restarted, dep_failures)
+
         self.notifier.notify_summary_report(summary)
         logger.info("--- Cycle End ---")
 

@@ -8,6 +8,7 @@ os.environ["DISCORD_WEBHOOK_URL"] = "http://mock"
 os.environ["CHECK_INTERVAL"] = "1"
 
 from main import WatcherService
+from discord_notifier import DiscordNotifier
 
 @patch('discord_notifier.requests.post')
 class TestWatcherService(unittest.TestCase):
@@ -97,9 +98,11 @@ class TestWatcherService(unittest.TestCase):
 
         self.mock_client.containers.list.return_value = [dep]
         
-        self.service.restart_dependents([{'name': 'app1', 'old_id': 'id1'}])
+        restarted, failures = self.service.restart_dependents([{'name': 'app1', 'old_id': 'id1'}])
         
         dep.restart.assert_called_once()
+        self.assertEqual(restarted, ["dep"])
+        self.assertEqual(failures, [])
 
     def test_restart_dependents_network_mode_id_warning(self, mock_post):
         dep = MagicMock()
@@ -111,10 +114,12 @@ class TestWatcherService(unittest.TestCase):
         self.mock_client.containers.list.return_value = [dep]
         
         with self.assertLogs('Watcher', level='WARNING') as cm:
-            self.service.restart_dependents([{'name': 'app1', 'old_id': 'id1'}])
+            restarted, failures = self.service.restart_dependents([{'name': 'app1', 'old_id': 'id1'}])
             self.assertTrue(any("UNSUPPORTED DEPENDENCY" in output for output in cm.output))
         
         dep.restart.assert_not_called()
+        self.assertEqual(restarted, [])
+        self.assertEqual(failures, [])
 
     def test_get_recreation_plan_advanced_fields(self, mock_post):
         mock_container = MagicMock()
@@ -157,10 +162,14 @@ class TestWatcherService(unittest.TestCase):
 
         self.mock_client.containers.list.return_value = [dep1, dep2]
         
-        self.service.restart_dependents([{'name': 'app1', 'old_id': 'id1'}, {'name': 'app2', 'old_id': 'id2'}])
+        restarted, failures = self.service.restart_dependents(
+            [{'name': 'app1', 'old_id': 'id1'}, {'name': 'app2', 'old_id': 'id2'}]
+        )
         
         dep1.restart.assert_called_once()
         dep2.restart.assert_called_once()
+        self.assertEqual(sorted(restarted), ["dep1", "dep2"])
+        self.assertEqual(failures, [])
 
     def test_process_container_reported(self, mock_post):
         mock_container = MagicMock()
@@ -237,10 +246,14 @@ class TestWatcherService(unittest.TestCase):
         self.mock_client.containers.list.return_value = [dep1]
         
         # 'just_updated' is in the updated_containers list
-        self.service.restart_dependents([{'name': 'other_app', 'old_id': 'id_other'}, {'name': 'just_updated', 'old_id': 'id1'}])
+        restarted, failures = self.service.restart_dependents(
+            [{'name': 'other_app', 'old_id': 'id_other'}, {'name': 'just_updated', 'old_id': 'id1'}]
+        )
         
         # Should NOT be restarted because it was just updated
         dep1.restart.assert_not_called()
+        self.assertEqual(restarted, [])
+        self.assertEqual(failures, [])
 
     def test_summary_includes_reported(self, mock_post):
         summary = {"updated": [], "failed": [], "rolled_back": [], "reported": ["app1", "app2"]}
@@ -253,6 +266,34 @@ class TestWatcherService(unittest.TestCase):
         self.assertIn("Updates Available", description)
         self.assertIn("app1", description)
         self.assertIn("app2", description)
+
+    def test_restart_dependents_records_failure(self, mock_post):
+        dep = MagicMock()
+        dep.name = "bad_dep"
+        dep.id = "x"
+        dep.labels = {"watcher.depends_on": "app1"}
+        dep.attrs = {"HostConfig": {"NetworkMode": ""}}
+        dep.restart.side_effect = RuntimeError("restart failed")
+        self.mock_client.containers.list.return_value = [dep]
+        restarted, failures = self.service.restart_dependents([{"name": "app1", "old_id": "id1"}])
+        self.assertEqual(restarted, [])
+        self.assertEqual(failures, [("bad_dep", "restart failed")])
+
+
+@patch('discord_notifier.requests.post')
+class TestDiscordNotifier(unittest.TestCase):
+    def test_notify_dependents_restarted_skips_when_empty(self, mock_post):
+        DiscordNotifier("http://mock").notify_dependents_restarted([], [])
+        mock_post.assert_not_called()
+
+    def test_notify_dependents_restarted_embed(self, mock_post):
+        DiscordNotifier("http://mock").notify_dependents_restarted(["dep1"], [("dep2", "boom")])
+        mock_post.assert_called_once()
+        desc = mock_post.call_args[1]["json"]["embeds"][0]["description"]
+        self.assertIn("dep1", desc)
+        self.assertIn("dep2", desc)
+        self.assertIn("boom", desc)
+
 
 if __name__ == '__main__':
     unittest.main()
