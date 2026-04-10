@@ -14,6 +14,8 @@ class Config:
         self.discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         self.ntfy_url = os.getenv("NTFY_URL")
+        self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.dry_run = self._parse_bool("DRY_RUN", False)
         
         # Registry Auth

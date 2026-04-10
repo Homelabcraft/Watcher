@@ -9,7 +9,13 @@ from notifier_factory import build_notifier
 
 class TestNotifierFactory(unittest.TestCase):
     def test_build_notifier_noop_when_no_backends_configured(self):
-        cfg = SimpleNamespace(discord_webhook_url=None, slack_webhook_url=None, ntfy_url=None)
+        cfg = SimpleNamespace(
+            discord_webhook_url=None,
+            slack_webhook_url=None,
+            ntfy_url=None,
+            telegram_bot_token=None,
+            telegram_chat_id=None,
+        )
         n = build_notifier(cfg)
         self.assertIsInstance(n, NoopNotifier)
 
@@ -44,6 +50,20 @@ class TestNtfyNotifier(unittest.TestCase):
         self.assertEqual(call_kw["data"], b"Reason: bad")
         self.assertIn("FAILED", call_kw["headers"]["Title"])
         self.assertIn("app", call_kw["headers"]["Title"])
+
+
+@patch("telegram_notifier.requests.post")
+class TestTelegramNotifier(unittest.TestCase):
+    def test_notify_failure_sends_html(self, mock_post):
+        from telegram_notifier import TelegramNotifier
+
+        TelegramNotifier("token", "12345").notify_failure("app", "bad")
+        mock_post.assert_called_once()
+        payload = mock_post.call_args[1]["json"]
+        self.assertEqual(payload["chat_id"], "12345")
+        self.assertIn("FAILED", payload["text"])
+        self.assertIn("app", payload["text"])
+        self.assertEqual(payload["parse_mode"], "HTML")
 
 
 if __name__ == "__main__":

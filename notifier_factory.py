@@ -5,6 +5,7 @@ from noop_notifier import NoopNotifier
 from notifier_protocol import Notifier
 from ntfy_notifier import NtfyNotifier
 from slack_notifier import SlackNotifier
+from telegram_notifier import TelegramNotifier
 
 
 def build_notifier(config: Config) -> Notifier:
@@ -16,6 +17,10 @@ def build_notifier(config: Config) -> Notifier:
         backends.append(SlackNotifier(config.slack_webhook_url))
     if getattr(config, "ntfy_url", None):
         backends.append(NtfyNotifier(config.ntfy_url))
+    tg_token = getattr(config, "telegram_bot_token", None)
+    tg_chat = getattr(config, "telegram_chat_id", None)
+    if tg_token and tg_chat:
+        backends.append(TelegramNotifier(tg_token, tg_chat))
     if not backends:
         return NoopNotifier()
     if len(backends) == 1:
