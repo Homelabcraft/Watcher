@@ -6,7 +6,7 @@ import socket
 from typing import Optional, Any
 
 from config import Config
-from discord_notifier import DiscordNotifier
+from notifier_factory import build_notifier
 from docker_handler import DockerHandler
 from health_monitor import HealthMonitor
 from docker.models.containers import Container
@@ -29,7 +29,7 @@ class WatcherService:
             sys.exit(1)
             
         self.docker = DockerHandler(self.client, self.config)
-        self.notifier = DiscordNotifier(self.config.discord_webhook_url)
+        self.notifier = build_notifier(self.config)
         self.health = HealthMonitor(self.client)
 
     def process_container(self, container: Container, auto_update: bool) -> tuple[str, Optional[str]]:
