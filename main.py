@@ -2,6 +2,7 @@ import time
 import logging
 import docker
 import sys
+import socket
 from typing import Optional, Any
 
 from config import Config
@@ -237,7 +238,7 @@ class WatcherService:
 
     def start(self):
         logger.info("Watcher started.")
-        self.notifier.notify_summary("Watcher Started", "Service is now monitoring containers.")
+        self.notifier.notify_startup(self.config.check_interval, socket.gethostname())
         try:
             while True:
                 self.run_cycle()

@@ -294,6 +294,16 @@ class TestDiscordNotifier(unittest.TestCase):
         self.assertIn("dep2", desc)
         self.assertIn("boom", desc)
 
+    def test_notify_startup_embed(self, mock_post):
+        DiscordNotifier("http://mock").notify_startup(86400, "my-host")
+        mock_post.assert_called_once()
+        embed = mock_post.call_args[1]["json"]["embeds"][0]
+        self.assertIn("Watcher started", embed["title"])
+        field_names = {f["name"] for f in embed["fields"]}
+        self.assertIn("Host", field_names)
+        self.assertIn("Scan interval", field_names)
+        self.assertIn("my-host", str(embed["fields"]))
+
 
 if __name__ == '__main__':
     unittest.main()

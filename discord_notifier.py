@@ -80,3 +80,24 @@ class DiscordNotifier:
 
     def notify_summary(self, title: str, message: str):
         self.send_event(title, message, color=0x95a5a6)
+
+    def notify_startup(self, check_interval_seconds: int, hostname: str):
+        """Rich startup embed with host and scan interval."""
+        if check_interval_seconds >= 86400:
+            iv = f"{check_interval_seconds // 86400}d"
+        elif check_interval_seconds >= 3600:
+            iv = f"{check_interval_seconds // 3600}h"
+        elif check_interval_seconds >= 60:
+            iv = f"{check_interval_seconds // 60}m"
+        else:
+            iv = f"{check_interval_seconds}s"
+        fields = [
+            {"name": "Host", "value": f"`{hostname}`", "inline": True},
+            {"name": "Scan interval", "value": f"`{iv}` ({check_interval_seconds}s)", "inline": True},
+        ]
+        self.send_event(
+            "Watcher started",
+            "Monitoring containers for image updates.",
+            color=0x95a5a6,
+            fields=fields,
+        )
