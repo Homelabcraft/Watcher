@@ -72,7 +72,8 @@ class WatcherService:
             if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                 logger.info(f"Success: {name}")
                 self.docker.remove_backup(name)
-                
+                self.notifier.notify_update_success(name, ref)
+
                 # 5. Cleanup (Only after success)
                 if self.config.cleanup_old_images:
                     self.docker.remove_image(old_image_id)

@@ -38,6 +38,10 @@ class TestWatcherService(unittest.TestCase):
         self.assertEqual(old_id, "old_id")
         self.service.docker.recreate.assert_called_once()
         self.service.docker.remove_backup.assert_called_once_with("test_app")
+        self.assertEqual(mock_post.call_count, 2)
+        second_payload = mock_post.call_args_list[1][1]["json"]
+        self.assertIn("Update OK", second_payload["embeds"][0]["title"])
+        self.assertIn("test_app:latest", second_payload["embeds"][0]["description"])
 
     def test_process_container_rollback(self, mock_post):
         mock_container = MagicMock()

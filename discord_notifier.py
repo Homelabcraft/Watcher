@@ -30,6 +30,14 @@ class DiscordNotifier:
     def notify_recreation_started(self, name: str, image: str):
         self.send_event(f"Updating: {name}", f"Pulling and recreating to `{image}`...", color=0x3498db)
 
+    def notify_update_success(self, name: str, image: str):
+        """Sent after health checks pass and backup cleanup is done."""
+        self.send_event(
+            f"Update OK: {name}",
+            f"Container is healthy on `{image}`.",
+            color=0x27ae60,
+        )
+
     def notify_failure(self, name: str, reason: str):
         self.send_event(f"FAILED: {name}", f"Reason: {reason}", color=0xe74c3c)
 
