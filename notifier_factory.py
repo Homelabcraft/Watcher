@@ -3,6 +3,7 @@ from discord_notifier import DiscordNotifier
 from multi_notifier import MultiNotifier
 from noop_notifier import NoopNotifier
 from notifier_protocol import Notifier
+from slack_notifier import SlackNotifier
 
 
 def build_notifier(config: Config) -> Notifier:
@@ -10,6 +11,8 @@ def build_notifier(config: Config) -> Notifier:
     backends: list[Notifier] = []
     if getattr(config, "discord_webhook_url", None):
         backends.append(DiscordNotifier(config.discord_webhook_url))
+    if getattr(config, "slack_webhook_url", None):
+        backends.append(SlackNotifier(config.slack_webhook_url))
     if not backends:
         return NoopNotifier()
     if len(backends) == 1:
