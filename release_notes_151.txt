@@ -1,0 +1,4 @@
+## [1.5.1] - 2026-04-12
+### Added
+- **Configurable Notification Verbosity:** Added `NOTIFY_UPDATES_AVAILABLE` environment variable (defaults to `true`). If set to `false`, Watcher will no longer include `watcher.enable=false` containers in the daily summary report, reducing notification spam for containers you explicitly chose not to auto-update.
+- **Dynamic Log Levels:** Added `LOG_LEVEL` environment variable (defaults to `INFO`). Can be set to `DEBUG` for deep troubleshooting and visibility into the Docker SDK recreation process.
