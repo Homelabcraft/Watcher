@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.2] - 2026-04-12
+### Fixed
+- **Repository Cleanup:** Removed accidentally tracked temporary release notes files from the repository.
+- **Configuration Parity:** Synchronized `docker-compose.yml` and `.env.example` to correctly include the new v1.5.0/v1.5.1 configuration variables (`LOG_LEVEL`, `NOTIFY_UPDATES_AVAILABLE`, `SCHEDULE_TIME`, `NTFY_URL`, etc.).
+- **Documentation:** Corrected the GitHub repository topics to strictly align with the project's scope.
+
 ## [1.5.1] - 2026-04-12
 ### Added
 - **Configurable Notification Verbosity:** Added `NOTIFY_UPDATES_AVAILABLE` environment variable (defaults to `true`). If set to `false`, Watcher will no longer include `watcher.enable=false` containers in the daily summary report, reducing notification spam for containers you explicitly chose not to auto-update.

@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat-square&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v1.5.1-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
+[![Version](https://img.shields.io/badge/version-v1.5.2-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
 
 **Watcher** is a production-grade Docker container auto-updater built for environments where downtime is unacceptable. It automates your image lifecycle while prioritizing **system stability and data persistence** through zero-data-loss rollbacks, multi-stage health validation, and rich multi-messenger notifications.
 

@@ -9,8 +9,10 @@ services:
     # Note: Environment variables in .env take precedence over these defaults
     environment:
       - CHECK_INTERVAL=${CHECK_INTERVAL:-86400}
-      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - SCHEDULE_TIME=${SCHEDULE_TIME:-}
       - DRY_RUN=${DRY_RUN:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - NOTIFY_UPDATES_AVAILABLE=${NOTIFY_UPDATES_AVAILABLE:-true}
     labels:
       - "watcher.self=true"
     restart: unless-stopped
