@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.3] - 2026-04-12
+### Changed
+- **Documentation:** Enhanced the configuration table in `README.md` to include Telegram variables.
+- **Verification:** Full synchronization check between local and public repository state.
+
 ## [1.5.2] - 2026-04-12
 ### Fixed
 - **Repository Cleanup:** Removed accidentally tracked temporary release notes files from the repository.

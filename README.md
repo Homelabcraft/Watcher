@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat-square&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v1.5.2-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
+[![Version](https://img.shields.io/badge/version-v1.5.3-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
 
 **Watcher** is a production-grade Docker container auto-updater built for environments where downtime is unacceptable. It automates your image lifecycle while prioritizing **system stability and data persistence** through zero-data-loss rollbacks, multi-stage health validation, and rich multi-messenger notifications.
 
@@ -90,6 +90,11 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | `HEALTH_CHECK_RETRIES` | `12` | Number of attempts to verify container health. |
 | `HEALTH_CHECK_DELAY` | `10` | Seconds to wait between health checks. |
 | `LOG_LEVEL` | `INFO` | Standard output log level. Can be set to `DEBUG` for extensive troubleshooting. |
+| `DISCORD_WEBHOOK_URL` | `""` | Optional: Discord Webhook for notifications. |
+| `SLACK_WEBHOOK_URL` | `""` | Optional: Slack Incoming Webhook. |
+| `TELEGRAM_BOT_TOKEN` | `""` | Optional: Telegram Bot API Token. |
+| `TELEGRAM_CHAT_ID` | `""` | Optional: Telegram Chat ID. |
+| `NTFY_URL` | `""` | Optional: Ntfy topic URL. |
 
 #### Notifications (Configure at least one)
 | Variable | Description |
