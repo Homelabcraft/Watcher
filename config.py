@@ -20,6 +20,8 @@ class Config:
         self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.dry_run = self._parse_bool("DRY_RUN", False)
+        self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+        self.notify_updates_available = self._parse_bool("NOTIFY_UPDATES_AVAILABLE", True)
         
         # Registry Auth
         self.reg_user = os.getenv("REGISTRY_USERNAME")

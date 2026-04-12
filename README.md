@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat-square&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v1.5.0-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
+[![Version](https://img.shields.io/badge/version-v1.5.1-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
 
 **Watcher** is a production-grade Docker container auto-updater built for environments where downtime is unacceptable. It automates your image lifecycle while prioritizing **system stability and data persistence** through zero-data-loss rollbacks, multi-stage health validation, and rich multi-messenger notifications.
 
@@ -85,9 +85,11 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | `SCHEDULE_TIME`  | `""`    | Optional: Run Watcher once daily at this specific local time (e.g. `03:00`). |
 | `WATCH_BY_LABEL` | `true`  | If true, only containers with `watcher.enable=true` are updated. |
 | `DRY_RUN`        | `false` | Generates a detailed Execution Plan to your configured messengers. |
+| `NOTIFY_UPDATES_AVAILABLE` | `true` | If false, suppresses "Updates Available" alerts in summary reports for `watcher.enable=false` containers. |
 | `CLEANUP_OLD_IMAGES` | `false` | Automatically prune dangling images after a successful update. |
 | `HEALTH_CHECK_RETRIES` | `12` | Number of attempts to verify container health. |
 | `HEALTH_CHECK_DELAY` | `10` | Seconds to wait between health checks. |
+| `LOG_LEVEL` | `INFO` | Standard output log level. Can be set to `DEBUG` for extensive troubleshooting. |
 
 #### Notifications (Configure at least one)
 | Variable | Description |

@@ -32,6 +32,12 @@ class WatcherService:
             logger.critical(f"Startup failed due to configuration error: {e}")
             sys.exit(1)
             
+        # Dynamically set logging level based on config
+        log_level = getattr(logging, self.config.log_level, logging.INFO)
+        logging.getLogger().setLevel(log_level)
+        for handler in logging.getLogger().handlers:
+            handler.setLevel(log_level)
+            
         try:
             self.client = docker.from_env(timeout=120)
         except Exception as e:
@@ -373,6 +379,11 @@ class WatcherService:
             self.restart_dependents(updated_info)
             
         cycle_duration = time.perf_counter() - cycle_start
+        
+        # Optionally hide "Updates Available" from summary report
+        if not self.config.notify_updates_available:
+            summary["reported"] = []
+            
         self.notifier.notify_summary_report(summary, all_infos, duration_sec=cycle_duration)
         logger.info("--- Cycle End ---")
 
