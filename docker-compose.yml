@@ -14,3 +14,4 @@ services:
     labels:
       - "watcher.self=true"
     restart: unless-stopped
+    stop_grace_period: 2m # Allow Watcher to finish current updates gracefully

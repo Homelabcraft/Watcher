@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-04-12
+### Added
+- **Multi-Messenger Notifications:** Pluggable notification backends. Added full support for Slack, Telegram, and Ntfy alongside Discord. 
+- **Rich Embeds & Dashboards:** Radically improved notifications. Notifications now provide extensive details including scan modes, version shifts (image hashes), exact duration, dependent restarts, and specific error steps.
+- **Fail-Fast Configuration:** Strict startup validation ensures Watcher fails immediately with a clear error if the environment is misconfigured (e.g., invalid intervals or webhook URLs), preventing silent runtime failures.
+- **Graceful Shutdown:** Safely handles `SIGTERM` and `SIGINT` signals. Watcher will never exit mid-update, guaranteeing containers are not left in an undefined or broken state if the host restarts.
+- **Daily Scheduling:** Added `SCHEDULE_TIME` config variable to allow running Watcher at a specific time once a day, instead of using a fixed interval.
+- **Robust Execution Plan (Dry Run):** The dry-run mode has been completely overhauled to not just log, but push a detailed "Execution Plan" to your configured messengers, showing exact targets and dependencies that *would* be touched.
+
+### Changed
+- **Architectural Rewrite:** The core logic now uses strict OOP models (`ContainerUpdateInfo`, `UpdateStatus`) instead of primitive types, massively boosting stability.
+- **Stop Timeout Resiliency:** The container stop process now reads the target container's specific `StopTimeout` from Docker, falling back to 15s. Additionally, Python client `ReadTimeout` exceptions during heavy stops (like databases or qBittorrent saving state) are now intercepted safely, eliminating false-positive rollback triggers.
+- **Global Timeout:** Increased the Docker client timeout to 120s to ensure Watcher does not lose connection during extensive operations.
+
 ## [1.4.3] - 2026-04-08
 ### Added
 - **Hardened Self-Protection:** Watcher now identifies itself via container ID, ensuring zero risk of self-updating even if renamed.

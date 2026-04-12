@@ -66,7 +66,7 @@ class TestRollbackBug(unittest.TestCase):
         mock_container = MagicMock()
         # First call fails, second succeeds
         mock_container.start.side_effect = [
-            Exception("unable to find user root: no matching entries in passwd file"),
+            docker.errors.APIError("unable to find user root: no matching entries in passwd file"),
             None
         ]
         

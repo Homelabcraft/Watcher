@@ -5,9 +5,10 @@ import os
 
 # Mock environment variables to prevent loading real config
 os.environ["DISCORD_WEBHOOK_URL"] = "http://mock"
-os.environ["CHECK_INTERVAL"] = "1"
+os.environ["CHECK_INTERVAL"] = "60"
 
 from main import WatcherService
+from models import UpdateStatus, ContainerUpdateInfo
 
 @patch('discord_notifier.requests.post')
 class TestWatcherService(unittest.TestCase):
@@ -26,16 +27,16 @@ class TestWatcherService(unittest.TestCase):
         mock_container.image.id = "old_image_hash"
         
         self.service.docker.get_image_ref = MagicMock(return_value="test_app:latest")
-        self.service.docker.check_for_update = MagicMock(return_value="update_available")
+        self.service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "old_hash", "new_hash"))
         self.service.docker.get_recreation_plan = MagicMock(return_value={"create_args": {}, "networks": {}})
         self.service.docker.recreate = MagicMock()
         self.service.docker.remove_backup = MagicMock()
         self.service.health.wait_for_health = MagicMock(return_value=True)
         
-        status, old_id = self.service.process_container(mock_container, auto_update=True)
+        info = self.service.process_container(mock_container, auto_update=True)
         
-        self.assertEqual(status, "updated")
-        self.assertEqual(old_id, "old_id")
+        self.assertEqual(info.status, UpdateStatus.UPDATED)
+        self.assertEqual(info.old_id, "old_id")
         self.service.docker.recreate.assert_called_once()
         self.service.docker.remove_backup.assert_called_once_with("test_app")
 
@@ -46,17 +47,15 @@ class TestWatcherService(unittest.TestCase):
         mock_container.image.id = "old_image_hash"
         
         self.service.docker.get_image_ref = MagicMock(return_value="test_app:latest")
-        self.service.docker.check_for_update = MagicMock(return_value="update_available")
+        self.service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "old_hash", "new_hash"))
         self.service.docker.get_recreation_plan = MagicMock(return_value={"create_args": {}, "networks": {}})
         self.service.docker.recreate = MagicMock()
         
         self.service.health.wait_for_health = MagicMock(return_value=False)
-        self.service.perform_rollback = MagicMock()
-        
-        status, old_id = self.service.process_container(mock_container, auto_update=True)
-        
-        self.assertEqual(status, "rolled_back")
-        self.assertIsNone(old_id)
+        self.service.perform_rollback = MagicMock(return_value=(True, "Mock rollback success"))
+
+        info = self.service.process_container(mock_container, auto_update=True)        
+        self.assertEqual(info.status, UpdateStatus.ROLLED_BACK)
         self.service.perform_rollback.assert_called_once_with("test_app", "old_image_hash")
 
     def test_perform_rollback_rename_failure(self, mock_post):
@@ -93,7 +92,7 @@ class TestWatcherService(unittest.TestCase):
 
         self.mock_client.containers.list.return_value = [dep]
         
-        self.service.restart_dependents([{'name': 'app1', 'old_id': 'id1'}])
+        self.service.restart_dependents([ContainerUpdateInfo('app1', 'id1', UpdateStatus.UPDATED)])
         
         dep.restart.assert_called_once()
 
@@ -107,7 +106,7 @@ class TestWatcherService(unittest.TestCase):
         self.mock_client.containers.list.return_value = [dep]
         
         with self.assertLogs('Watcher', level='WARNING') as cm:
-            self.service.restart_dependents([{'name': 'app1', 'old_id': 'id1'}])
+            self.service.restart_dependents([ContainerUpdateInfo('app1', 'id1', UpdateStatus.UPDATED)])
             self.assertTrue(any("UNSUPPORTED DEPENDENCY" in output for output in cm.output))
         
         dep.restart.assert_not_called()
@@ -153,7 +152,10 @@ class TestWatcherService(unittest.TestCase):
 
         self.mock_client.containers.list.return_value = [dep1, dep2]
         
-        self.service.restart_dependents([{'name': 'app1', 'old_id': 'id1'}, {'name': 'app2', 'old_id': 'id2'}])
+        self.service.restart_dependents([
+            ContainerUpdateInfo('app1', 'id1', UpdateStatus.UPDATED),
+            ContainerUpdateInfo('app2', 'id2', UpdateStatus.UPDATED)
+        ])
         
         dep1.restart.assert_called_once()
         dep2.restart.assert_called_once()
@@ -161,12 +163,12 @@ class TestWatcherService(unittest.TestCase):
     def test_process_container_reported(self, mock_post):
         mock_container = MagicMock()
         mock_container.name = "test_app"
-        self.service.docker.check_for_update = MagicMock(return_value="update_available")
+        self.service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "old_hash", "new_hash"))
         self.service.docker.recreate = MagicMock()
         
-        status, _ = self.service.process_container(mock_container, auto_update=False)
+        info = self.service.process_container(mock_container, auto_update=False)
         
-        self.assertEqual(status, "reported")
+        self.assertEqual(info.status, UpdateStatus.REPORTED)
         self.service.docker.recreate.assert_not_called()
 
     def test_get_watched_containers_watch_by_label_true(self, mock_post):
@@ -233,7 +235,10 @@ class TestWatcherService(unittest.TestCase):
         self.mock_client.containers.list.return_value = [dep1]
         
         # 'just_updated' is in the updated_containers list
-        self.service.restart_dependents([{'name': 'other_app', 'old_id': 'id_other'}, {'name': 'just_updated', 'old_id': 'id1'}])
+        self.service.restart_dependents([
+            ContainerUpdateInfo('other_app', 'id_other', UpdateStatus.UPDATED),
+            ContainerUpdateInfo('just_updated', 'id1', UpdateStatus.UPDATED)
+        ])
         
         # Should NOT be restarted because it was just updated
         dep1.restart.assert_not_called()

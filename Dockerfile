@@ -13,5 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY . .
 
+# Ensure graceful shutdown signals reach the python script
+STOPSIGNAL SIGTERM
+
 # Run the application
 CMD ["python", "main.py"]

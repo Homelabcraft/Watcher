@@ -2,9 +2,13 @@ import logging
 import docker
 import docker.errors
 import socket
+import requests
 from docker.types import Mount, Ulimit, LogConfig
 from docker.models.containers import Container
-from typing import Optional, List
+from typing import Optional, List, Tuple
+
+from models import UpdateStatus
+from exceptions import RecreationError
 
 logger = logging.getLogger('Watcher.Docker')
 
@@ -24,7 +28,7 @@ class DockerHandler:
         except:
             return None
 
-    def get_watched_containers(self) -> tuple[List[Container], List[Container]]:
+    def get_watched_containers(self) -> Tuple[List[Container], List[Container]]:
         """Finds containers using internal config for filtering. Returns (auto_update, monitor_only)."""
         auto_update = []
         monitor_only = []
@@ -79,10 +83,9 @@ class DockerHandler:
                 
         return None
 
-    def check_for_update(self, container: Container) -> str:
-        if self.dry_run: return "skipped_dry_run"
+    def check_for_update(self, container: Container) -> Tuple[UpdateStatus, Optional[str], Optional[str]]:
         ref = self.get_image_ref(container)
-        if not ref: return "error"
+        if not ref: return UpdateStatus.FAILED, None, None
         try:
             auth = None
             if self.config and self.config.reg_user:
@@ -91,10 +94,17 @@ class DockerHandler:
             old_id = container.image.id
             self.client.images.pull(ref, auth_config=auth)
             new_image = self.client.images.get(ref)
-            return "update_available" if old_id != new_image.id else "no_update"
+            
+            if old_id != new_image.id:
+                return UpdateStatus.UPDATE_AVAILABLE, old_id, new_image.id
+            else:
+                return UpdateStatus.NO_UPDATE, old_id, old_id
+        except docker.errors.APIError as e:
+            logger.error(f"Docker API error during pull for {container.name}: {e}")
+            return UpdateStatus.FAILED, None, None
         except Exception as e:
-            logger.error(f"Pull failed for {container.name}: {e}")
-            return "error"
+            logger.error(f"Unexpected pull error for {container.name}: {e}")
+            return UpdateStatus.FAILED, None, None
 
     def get_recreation_plan(self, container: Container) -> dict:
         container.reload()
@@ -199,7 +209,7 @@ class DockerHandler:
             "networks": attrs.get('NetworkSettings', {}).get('Networks') or {}
         }
 
-    def recreate(self, name: str, plan: dict):
+    def recreate(self, name: str, plan: dict) -> Optional[Container]:
         if self.dry_run: return None
         ca = plan["create_args"].copy() # Work on a copy to allow retry modifications
         nets = plan["networks"]
@@ -226,7 +236,24 @@ class DockerHandler:
         # 1. State Capture: Stop and Rename old container
         try:
             old = self.client.containers.get(name)
-            old.stop(timeout=15)
+            
+            # Use container's specific stop timeout if defined, otherwise 15s
+            stop_timeout = old.attrs.get('Config', {}).get('StopTimeout')
+            timeout = int(stop_timeout) if stop_timeout is not None else 15
+            
+            logger.info(f"Stopping original container {name} (timeout: {timeout}s)...")
+            try:
+                old.stop(timeout=timeout)
+            except requests.exceptions.ReadTimeout:
+                logger.warning(f"Stop request for {name} timed out in python client. Assuming Docker daemon is still stopping it.")
+                # We can't easily wait without another timeout, so we give it a few more seconds via reload
+                import time
+                for _ in range(15):
+                    old.reload()
+                    if old.status != "running":
+                        break
+                    time.sleep(2)
+            
             backup_name = f"{name}_backup"
             try:
                 existing = self.client.containers.get(backup_name)
@@ -234,6 +261,8 @@ class DockerHandler:
             except docker.errors.NotFound: pass
             old.rename(backup_name)
         except docker.errors.NotFound: pass
+        except Exception as e:
+            raise RecreationError(f"Failed to stop/rename original container {name}: {e}")
 
         # 2. Execution: Attempt recreation (with potential retry for User errors)
         attempts = 0
@@ -261,7 +290,7 @@ class DockerHandler:
                 new_container.start()
                 return new_container
 
-            except Exception as e:
+            except docker.errors.APIError as e:
                 error_msg = str(e).lower()
                 is_user_error = "unable to find user" in error_msg or "no matching entries in passwd file" in error_msg
                 
@@ -280,9 +309,13 @@ class DockerHandler:
                     ca.pop("user")
                     continue
                 
-                # If we reach here, either it wasn't a user error, we already tried, or max attempts reached
-                logger.error(f"RECREATION FAILED for {name} on attempt {attempts}: {e}")
-                raise
+                logger.error(f"Docker API Error during recreation of {name} on attempt {attempts}: {e}")
+                raise RecreationError(f"Docker API Error: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected Error during recreation of {name} on attempt {attempts}: {e}")
+                raise RecreationError(f"Unexpected Error: {e}")
+        
+        raise RecreationError(f"Failed to recreate {name} after {max_attempts} attempts.")
 
     def remove_backup(self, name: str):
         """Removes the backup container after a successful update."""
@@ -301,5 +334,7 @@ class DockerHandler:
         try:
             logger.info(f"Cleaning up image {image_id[:12]}...")
             self.client.images.remove(image=image_id, noprune=False)
+        except docker.errors.APIError as e:
+            logger.debug(f"Image cleanup skipped (in use or missing): {e}")
         except Exception as e:
-            logger.debug(f"Image cleanup skipped: {e}")
+            logger.warning(f"Unexpected error during image cleanup: {e}")

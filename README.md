@@ -3,9 +3,9 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat-square&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v1.4.3-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
+[![Version](https://img.shields.io/badge/version-v1.5.0-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
 
-**Watcher** is a high-integrity, production-grade container orchestration utility designed for automated image lifecycle management. Unlike standard update tools, Watcher prioritizes **system stability and data persistence** through a sophisticated *Rename-Backup-Strategy* and multi-stage health validation.
+**Watcher** is a high-integrity, production-grade container orchestration utility designed for automated image lifecycle management. Unlike standard update tools, Watcher prioritizes **system stability and data persistence** through a sophisticated *Rename-Backup-Strategy*, multi-stage health validation, and rigorous state management.
 
 ---
 
@@ -22,14 +22,16 @@ In enterprise environments, a failed container update isn't just an inconvenienc
 
 ---
 
-## 🚀 Enterprise Features
+## 🚀 Enterprise Features (v1.5)
 
 *   **🛡️ Hardened Recreation:** Full support for advanced Docker configurations: `Ulimits`, `Sysctls`, `LogConfig`, `ShmSize`, `IpcMode`, and `PidMode`.
+*   **🛑 Graceful Shutdown:** Safely handles `SIGTERM` and `SIGINT` signals. Watcher will never exit mid-update, guaranteeing containers are not left in an undefined or broken state if the host restarts.
+*   **🚫 Fail-Fast Configuration:** Strict startup validation ensures Watcher fails immediately with a clear error if the environment is misconfigured (e.g., invalid intervals or webhook URLs), preventing silent failures during runtime.
 *   **🔄 Intelligent Rollbacks:** Zero-data-loss recovery if the new image is unhealthy or crashes on startup.
 *   **⚖️ Hybrid Update Strategy:** Opt-in/Opt-out modes allowing you to auto-update stateless apps while only *monitoring* mission-critical databases.
 *   **🔗 Deep Dependency Management:** Support for `watcher.depends_on` labels and `NetworkMode: container:<name>` linking.
 *   **🧠 Smart Restart Protection:** Prevents infinite restart loops by deduplicating dependency triggers within the same cycle.
-*   **📊 Summary Reporting:** Professional Discord notifications with categorized results (Updated, Reported, Failed, Rolled Back).
+*   **📊 Summary Reporting:** Professional Discord notifications with categorized results (Updated, Reported, Failed, Rolled Back). Notification failures never crash the orchestration loop.
 
 ---
 
@@ -39,9 +41,10 @@ In enterprise environments, a failed container update isn't just an inconvenienc
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `CHECK_INTERVAL` | `86400` | Scan frequency in seconds (Default: 24h). |
-| `WATCH_BY_LABEL` | `true` | If true, only containers with `watcher.enable=true` are updated. |
-| `DRY_RUN` | `false` | Simulate updates without pulling or recreating. |
+| `CHECK_INTERVAL` | `86400` | Scan frequency in seconds (Default: 24h). Ignored if `SCHEDULE_TIME` is set. Must be >= 10. |
+| `SCHEDULE_TIME`  | `""`    | Optional: Run Watcher once daily at this specific local time (e.g. `03:00`). |
+| `WATCH_BY_LABEL` | `true`  | If true, only containers with `watcher.enable=true` are updated. |
+| `DRY_RUN`        | `false` | Generates a detailed Execution Plan to Discord. **Note:** Pulls new images to detect changes, but does not stop, recreate, or restart any containers. |
 | `CLEANUP_OLD_IMAGES` | `false` | Automatically prune dangling images after a successful update. |
 | `HEALTH_CHECK_RETRIES` | `12` | Number of attempts to verify container health. |
 | `HEALTH_CHECK_DELAY` | `10` | Seconds to wait between health checks. |

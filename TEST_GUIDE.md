@@ -31,6 +31,7 @@ To verify the watcher with real containers, follow these steps:
        env_file: .env
        labels:
          - "watcher.self=true"
+       stop_grace_period: 2m
          
      web_app:
        image: nginx:1.24
@@ -67,5 +68,24 @@ To verify the watcher with real containers, follow these steps:
    
 Watcher should detect the change, restart `web_app`, and subsequently restart `db_backend`. Check your Discord channel for the summary report.
 
-## 3. Protecting the Watcher
+## 3. Testing v1.5 Safety Features
+
+### Dry Run / Execution Plan
+Set `DRY_RUN=true` in your `.env`. When you run Watcher, it will generate a detailed **Execution Plan** and send it to Discord. 
+
+**Important:** To reliably detect updates, Watcher *will* pull the latest images from the registry, which updates your local image cache. However, it will **not** stop, recreate, or restart any of your running containers. The Execution Plan shows exactly which containers would be updated (including old and new Image Hashes) and which dependents would be restarted if `DRY_RUN` were false.
+
+### Daily Scheduling
+Set `SCHEDULE_TIME=14:30` (or any time slightly in the future) in your `.env`. Watcher will calculate the sleep time until this exact moment and execute a run.
+
+### Fail-Fast Configuration
+Set an invalid configuration in your `.env` (e.g., `CHECK_INTERVAL=-1` or `CHECK_INTERVAL=5`). 
+Run `docker-compose up -d watcher` and check the logs: `docker logs watcher`. 
+Watcher should exit immediately with a clear `ConfigurationError` and `Exit Code 1`.
+
+### Graceful Shutdown
+While Watcher is in the middle of pulling an image or recreating a container, run `docker-compose stop watcher`.
+Because of the new `SIGTERM` handler and `stop_grace_period: 2m`, Watcher will log `Graceful shutdown initiated`. It does not forcefully abort blocking Docker API calls, but rather flags the shutdown, finishes the current critical update step (including health checks and rollback if necessary), and then exits safely.
+
+## 4. Protecting the Watcher
 Always ensure your Watcher container has the `watcher.self=true` label if you are running it alongside the containers it monitors. This guarantees it will never attempt to update or restart itself, preventing a broken state.
