@@ -5,6 +5,7 @@ import sys
 import signal
 import threading
 import socket
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -12,6 +13,7 @@ from config import Config
 from notifier_factory import build_notifier
 from docker_handler import DockerHandler
 from health_monitor import HealthMonitor
+from journal import Journal
 from docker.models.containers import Container
 from models import UpdateStatus, ContainerUpdateInfo, ExecutionPlan
 from exceptions import ConfigurationError, RecreationError
@@ -47,6 +49,14 @@ class WatcherService:
         self.docker = DockerHandler(self.client, self.config)
         self.notifier = build_notifier(self.config)
         self.health = HealthMonitor(self.client)
+        self.journal = Journal(
+            self.config.journal_enabled, 
+            self.config.journal_path, 
+            max_entries=self.config.journal_max_entries
+        )
+        
+        # 1.6.0 Failure tracking
+        self.failure_tracker = {} # name -> {"count": int, "cooldown_until": datetime}
         
         self.shutdown_event = threading.Event()
         self._setup_signals()
@@ -61,6 +71,20 @@ class WatcherService:
         sig_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
         logger.info(f"Received {sig_name}. Graceful shutdown initiated. Will exit after current cycle/update completes...")
         self.shutdown_event.set()
+
+    def _is_in_cooldown(self, name: str) -> bool:
+        """Checks if a container is currently in error cooldown."""
+        tracker = self.failure_tracker.get(name)
+        if not tracker:
+            return False
+            
+        if tracker["count"] < self.config.max_retries_before_cooldown:
+            return False
+            
+        if datetime.now() < tracker["cooldown_until"]:
+            return True
+            
+        return False
 
     def process_container(self, container: Container, auto_update: bool) -> ContainerUpdateInfo:
         """Standard production update lifecycle with rename backup protection."""
@@ -88,11 +112,15 @@ class WatcherService:
             if status == UpdateStatus.NO_UPDATE:
                 info.status = UpdateStatus.NO_UPDATE
                 info.error_step = None
+                # Success/No-change clears the failure tracker
+                if name in self.failure_tracker:
+                    del self.failure_tracker[name]
                 return info
             if status == UpdateStatus.FAILED:
                 logger.error(f"Update check failed for {name}")
                 info.error_message = "Update check failed"
                 self.notifier.notify_update_failure(info)
+                self._record_failure(name)
                 return info
 
             # Dry Run: Record UPDATE_AVAILABLE but stop execution
@@ -119,7 +147,8 @@ class WatcherService:
             # 3. Execution
             info.error_step = "recreate"
             logger.info(f"Updating {name}...")
-            self.notifier.notify_update_started(name, ref, info.old_image_short_id, info.new_image_short_id, current_status, dependents)
+            if self.config.notify_on_update_start:
+                self.notifier.notify_update_started(name, ref, info.old_image_short_id, info.new_image_short_id, current_status, dependents)
             
             recreate_started = True
             new_container = self.docker.recreate(name, plan)
@@ -140,6 +169,11 @@ class WatcherService:
                 info.error_step = None
                 info.duration_sec = time.perf_counter() - start_time
                 self.notifier.notify_update_success(info)
+                
+                # Success clears the failure tracker
+                if name in self.failure_tracker:
+                    del self.failure_tracker[name]
+                    
                 return info
             else:
                 logger.error(f"Health failed: {name}. Rolling back...")
@@ -154,6 +188,7 @@ class WatcherService:
                 info.rollback_details = rb_detail
                 info.duration_sec = time.perf_counter() - start_time
                 self.notifier.notify_update_failure(info)
+                self._record_failure(name)
                 return info
 
         except RecreationError as e:
@@ -169,6 +204,7 @@ class WatcherService:
                 
             info.duration_sec = time.perf_counter() - start_time
             self.notifier.notify_update_failure(info)
+            self._record_failure(name)
             return info
         except Exception as e:
             logger.error(f"Error processing {name}: {e}")
@@ -183,7 +219,16 @@ class WatcherService:
                 
             info.duration_sec = time.perf_counter() - start_time
             self.notifier.notify_update_failure(info)
+            self._record_failure(name)
             return info
+
+    def _record_failure(self, name: str):
+        """Internal helper to increment failure count and set cooldown."""
+        tracker = self.failure_tracker.get(name, {"count": 0, "cooldown_until": datetime.min})
+        tracker["count"] += 1
+        tracker["cooldown_until"] = datetime.now() + timedelta(seconds=self.config.failure_cooldown_seconds)
+        self.failure_tracker[name] = tracker
+        logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
 
     def perform_rollback(self, name: str, old_id: str) -> tuple[bool, str]:
         """Rollback using the saved backup container."""
@@ -283,6 +328,9 @@ class WatcherService:
         Restarts containers that explicitly depend on the updated containers via labels
         or NetworkMode.
         """
+        if not self.config.restart_dependents:
+            return
+            
         if not updated_containers:
             return
             
@@ -310,7 +358,12 @@ class WatcherService:
             return float(self.config.check_interval)
             
         now = datetime.now()
-        target_time = datetime.strptime(self.config.schedule_time, "%H:%M").time()
+        try:
+            target_time = datetime.strptime(self.config.schedule_time, "%H:%M").time()
+        except ValueError:
+            logger.error(f"Invalid SCHEDULE_TIME: {self.config.schedule_time}. Falling back to 24h interval.")
+            return 86400.0
+
         target_dt = datetime.combine(now.date(), target_time)
         
         if now >= target_dt:
@@ -326,39 +379,51 @@ class WatcherService:
         total_checked = len(auto_update) + len(monitor_only)
         self.notifier.notify_scan_started(total_checked, "DRY_RUN" if self.config.dry_run else "LIVE")
         
-        summary = {"updated": [], "failed": [], "rolled_back": [], "reported": []}
+        summary = {"updated": [], "failed": [], "rolled_back": [], "reported": [], "skipped": []}
         updated_info = []
         all_infos = []
         
         plan = ExecutionPlan(checked_containers=total_checked)
+        update_count = 0
         
-        for c in auto_update:
-            if self.shutdown_event.is_set():
-                logger.info("Shutdown requested, skipping remaining auto-update containers in this cycle.")
-                break
-            info = self.process_container(c, auto_update=True)
-            all_infos.append(info)
-            if info.status == UpdateStatus.UPDATE_AVAILABLE:
-                plan.updates_available.append(info)
-            elif info.status == UpdateStatus.UPDATED:
-                summary["updated"].append(info.name)
-                updated_info.append(info)
-            elif info.status == UpdateStatus.FAILED:
-                summary["failed"].append(info.name)
-            elif info.status == UpdateStatus.ROLLED_BACK:
-                summary["rolled_back"].append(info.name)
+        # Helper to process containers with cooldown check
+        def handle_container_list(container_list, is_auto):
+            nonlocal update_count
+            for c in container_list:
+                if self.shutdown_event.is_set():
+                    break
                 
-        for c in monitor_only:
-            if self.shutdown_event.is_set():
-                logger.info("Shutdown requested, skipping remaining monitor-only containers in this cycle.")
-                break
-            info = self.process_container(c, auto_update=False)
-            all_infos.append(info)
-            if info.status in (UpdateStatus.REPORTED, UpdateStatus.UPDATE_AVAILABLE):
-                summary["reported"].append(info.name)
-                plan.monitored_only.append(info)
-            elif info.status == UpdateStatus.FAILED:
-                summary["failed"].append(info.name)
+                if self._is_in_cooldown(c.name):
+                    logger.info(f"Skipping {c.name} (in error cooldown)")
+                    info = ContainerUpdateInfo(c.name, c.id, UpdateStatus.SKIPPED_COOLDOWN)
+                    all_infos.append(info)
+                    summary["skipped"].append(c.name)
+                    continue
+                
+                # Check for max updates limit
+                if is_auto and self.config.max_updates_per_cycle > 0 and update_count >= self.config.max_updates_per_cycle:
+                    logger.info(f"Max updates reached for this cycle. Skipping {c.name}.")
+                    continue
+
+                info = self.process_container(c, auto_update=is_auto)
+                all_infos.append(info)
+                
+                if info.status == UpdateStatus.UPDATE_AVAILABLE:
+                    plan.updates_available.append(info)
+                elif info.status == UpdateStatus.REPORTED:
+                    summary["reported"].append(info.name)
+                    plan.monitored_only.append(info)
+                elif info.status == UpdateStatus.UPDATED:
+                    summary["updated"].append(info.name)
+                    updated_info.append(info)
+                    update_count += 1
+                elif info.status == UpdateStatus.FAILED:
+                    summary["failed"].append(info.name)
+                elif info.status == UpdateStatus.ROLLED_BACK:
+                    summary["rolled_back"].append(info.name)
+
+        handle_container_list(auto_update, True)
+        handle_container_list(monitor_only, False)
                 
         if self.config.dry_run:
             if plan.updates_available:
@@ -372,6 +437,7 @@ class WatcherService:
                 next_run = (datetime.now() + timedelta(seconds=duration)).strftime("%Y-%m-%d %H:%M")
                 
             self.notifier.notify_execution_plan(plan, next_run)
+            self.journal.record_cycle(total_checked, "DRY_RUN", summary, all_infos, time.perf_counter() - cycle_start)
             logger.info("--- Dry Run Cycle End ---")
             return
                 
@@ -379,12 +445,28 @@ class WatcherService:
             self.restart_dependents(updated_info)
             
         cycle_duration = time.perf_counter() - cycle_start
+        self.journal.record_cycle(total_checked, "LIVE", summary, all_infos, cycle_duration)
         
-        # Optionally hide "Updates Available" from summary report
-        if not self.config.notify_updates_available:
-            summary["reported"] = []
+        # Apply Notification Strategy
+        # Decision for 1.6.0: 'on_change' only triggers if an ACTION occurred (Update, Fail, Rollback).
+        # Pure 'reported' (monitor-only updates) do NOT trigger a summary if strategy is 'on_change'.
+        should_notify = True
+        strategy = self.config.notify_summary_strategy
+        
+        has_errors = len(summary["failed"]) > 0 or len(summary["rolled_back"]) > 0
+        has_actions = len(summary["updated"]) > 0 or has_errors
+        
+        if strategy == "on_error":
+            should_notify = has_errors
+        elif strategy == "on_change":
+            should_notify = has_actions
             
-        self.notifier.notify_summary_report(summary, all_infos, duration_sec=cycle_duration)
+        if should_notify:
+            # Optionally hide "Updates Available" from summary report
+            if not self.config.notify_updates_available:
+                summary["reported"] = []
+            self.notifier.notify_summary_report(summary, all_infos, duration_sec=cycle_duration)
+            
         logger.info("--- Cycle End ---")
 
     def start(self):
@@ -396,9 +478,14 @@ class WatcherService:
             "watch_by_label": self.config.watch_by_label,
             "cleanup_old_images": self.config.cleanup_old_images,
             "health_check_retries": self.config.health_check_retries,
-            "health_check_delay": self.config.health_check_delay
+            "health_check_delay": self.config.health_check_delay,
+            "journal_enabled": self.config.journal_enabled,
+            "cooldown_seconds": self.config.failure_cooldown_seconds
         }
-        self.notifier.notify_startup(config_dict, socket.gethostname())
+        
+        if self.config.notify_on_startup:
+            self.notifier.notify_startup(config_dict, socket.gethostname())
+            
         try:
             while not self.shutdown_event.is_set():
                 self.run_cycle()

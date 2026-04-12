@@ -9,6 +9,7 @@ class UpdateStatus(Enum):
     ROLLED_BACK = auto()
     FAILED = auto()
     REPORTED = auto()
+    SKIPPED_COOLDOWN = auto()
 
 @dataclass
 class ContainerUpdateInfo:

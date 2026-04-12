@@ -105,8 +105,10 @@ class DiscordNotifier:
             lines.append(f"\n✅ **Updated:**\n- " + "\n- ".join(updated_formatted))
         if summary["failed"]:
             lines.append(f"\n❌ **Failed:** {', '.join(summary['failed'])}")
-        if summary["rolled_back"]:
+        if summary.get("rolled_back"):
             lines.append(f"\n⚠️ **Rolled Back:** {', '.join(summary['rolled_back'])}")
+        if summary.get("skipped"):
+            lines.append(f"\n⏭️ **Skipped (Cooldown):** {', '.join(summary['skipped'])}")
 
         self.send_event("Cycle Complete", "\n".join(lines), color=0x9b59b6)
 

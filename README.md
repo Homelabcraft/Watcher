@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat-square&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v1.5.3-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
+[![Version](https://img.shields.io/badge/version-v1.6.0-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
 
 **Watcher** is a production-grade Docker container auto-updater built for environments where downtime is unacceptable. It automates your image lifecycle while prioritizing **system stability and data persistence** through zero-data-loss rollbacks, multi-stage health validation, and rich multi-messenger notifications.
 
@@ -16,7 +16,9 @@ While tools like Watchtower are great for blindly pulling and restarting contain
 *   **Zero-Downtime Philosophy:** Watcher doesn't just delete your working container. It pauses it, renames it, and keeps it as an instant backup.
 *   **Health Validation:** It verifies the health of the newly pulled container. If it crashes or reports unhealthy, Watcher instantly restores the backup.
 *   **Rich Notifications:** Instead of generic "Update applied" logs, Watcher sends comprehensive, color-coded execution plans, version shifts (image hashes), and detailed rollback reports to **Discord, Slack, Telegram, or Ntfy**.
-*   **Total Control:** Granular opt-in/opt-out labeling, deep dependency restarts, and robust dry-runs ensure you always know exactly what will happen.
+*   **Local Journaling:** Watcher maintains a persistent local JSON history of every scan cycle and update result for auditing and troubleshooting.
+*   **Intelligent Cooldown:** Avoids "retry loops" by automatically placing failing containers into a cooldown period.
+*   **Total Control:** Granular opt-in/opt-out labeling, deep dependency restarts, regex-based exclusions, and robust dry-runs ensure you always know exactly what will happen.
 
 ---
 
@@ -51,15 +53,17 @@ services:
 
 ---
 
-## 🚀 Key Features (v1.5)
+## 🚀 Key Features (v1.6)
 
+*   **📔 Update Journal:** Persistent local history of every scan cycle and update result in `journal.json`.
+*   **❄️ Failure Cooldown:** Prevents aggressive retries of failing containers via configurable `FAILURE_COOLDOWN_SECONDS`.
 *   **🛡️ Hardened Recreation:** Full support for advanced Docker configurations: `Ulimits`, `Sysctls`, `LogConfig`, `ShmSize`, `IpcMode`, and `PidMode`.
 *   **🛑 Graceful Shutdown:** Safely handles `SIGTERM`/`SIGINT`. Watcher will never exit mid-update, guaranteeing containers are not left in an undefined state.
 *   **🚫 Fail-Fast Configuration:** Strict startup validation ensures Watcher fails immediately with a clear error if misconfigured.
 *   **⚖️ Hybrid Update Strategy:** Opt-in (`watcher.enable=true`) and Opt-out (`watcher.enable=false`) monitoring modes.
-*   **🔗 Smart Dependency Management:** Support for `watcher.depends_on` labels and `NetworkMode: container:<name>` linking with automatic restart deduplication.
+*   **🔍 Advanced Filtering:** Exclude containers globally via names (`EXCLUDE_CONTAINER_NAMES`) or Regex (`EXCLUDE_CONTAINER_REGEX`).
 *   **⏱️ Precision Scheduling:** Run scans on a strict interval (`CHECK_INTERVAL`) or at an exact time daily (`SCHEDULE_TIME`).
-*   **📋 Robust Dry Runs:** Safely simulate updates to generate a detailed Execution Plan sent directly to your messengers without altering running containers.
+*   **📋 Robust Dry Runs:** Generates a detailed Execution Plan sent directly to your messengers without altering running containers.
 
 ---
 
@@ -85,25 +89,29 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | `SCHEDULE_TIME`  | `""`    | Optional: Run Watcher once daily at this specific local time (e.g. `03:00`). |
 | `WATCH_BY_LABEL` | `true`  | If true, only containers with `watcher.enable=true` are updated. |
 | `DRY_RUN`        | `false` | Generates a detailed Execution Plan to your configured messengers. |
-| `NOTIFY_UPDATES_AVAILABLE` | `true` | If false, suppresses "Updates Available" alerts in summary reports for `watcher.enable=false` containers. |
+| `JOURNAL_ENABLED` | `true` | Enable persistent local JSON history of all scan cycles. |
+| `JOURNAL_MAX_ENTRIES` | `100` | Maximum cycle records to keep in the journal. |
+| `FAILURE_COOLDOWN_SECONDS` | `3600` | Seconds to wait before retrying a container that failed multiple times. |
+| `MAX_UPDATES_PER_CYCLE` | `0` | Limit updates per run (0 = unlimited) to prevent resource spikes. |
+| `RESTART_DEPENDENTS` | `true` | If false, disables the automatic restart of linked containers. |
+| `NOTIFY_SUMMARY_STRATEGY` | `always` | `always`, `on_change` (action taken), or `on_error`. |
+| `NOTIFY_ON_STARTUP` | `true` | Set to false for a quieter startup (no "Watcher Started" alert). |
+| `EXCLUDE_CONTAINER_REGEX` | `""` | Optional regex pattern to ignore containers by name. |
 | `CLEANUP_OLD_IMAGES` | `false` | Automatically prune dangling images after a successful update. |
 | `HEALTH_CHECK_RETRIES` | `12` | Number of attempts to verify container health. |
 | `HEALTH_CHECK_DELAY` | `10` | Seconds to wait between health checks. |
-| `LOG_LEVEL` | `INFO` | Standard output log level. Can be set to `DEBUG` for extensive troubleshooting. |
-| `DISCORD_WEBHOOK_URL` | `""` | Optional: Discord Webhook for notifications. |
-| `SLACK_WEBHOOK_URL` | `""` | Optional: Slack Incoming Webhook. |
-| `TELEGRAM_BOT_TOKEN` | `""` | Optional: Telegram Bot API Token. |
-| `TELEGRAM_CHAT_ID` | `""` | Optional: Telegram Chat ID. |
-| `NTFY_URL` | `""` | Optional: Ntfy topic URL. |
+| `LOG_LEVEL` | `INFO` | Standard output log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 
-#### Notifications (Configure at least one)
+#### Notifications
 | Variable | Description |
 | :--- | :--- |
 | `DISCORD_WEBHOOK_URL` | Your Discord Webhook URL. |
 | `SLACK_WEBHOOK_URL`   | Your Slack Incoming Webhook URL. |
 | `TELEGRAM_BOT_TOKEN`  | Your Telegram Bot API Token. |
 | `TELEGRAM_CHAT_ID`    | Your Telegram target Chat ID. |
-| `NTFY_URL`            | Your Ntfy topic URL (e.g., `https://ntfy.sh/mytopic`). |
+| `NTFY_URL`            | Your Ntfy topic URL. |
+| `NOTIFY_UPDATES_AVAILABLE` | If false, suppresses alerts for monitored-only containers. |
+| `NOTIFY_ON_UPDATE_START` | If false, suppresses the "Initiating sequence" notifications. |
 
 ### Docker Labels
 

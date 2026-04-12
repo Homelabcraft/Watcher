@@ -3,6 +3,7 @@ import docker
 import docker.errors
 import socket
 import requests
+import re
 from docker.types import Mount, Ulimit, LogConfig
 from docker.models.containers import Container
 from typing import Optional, List, Tuple
@@ -25,13 +26,22 @@ class DockerHandler:
             hostname = socket.gethostname()
             c = self.client.containers.get(hostname)
             return c.id
-        except:
+        except Exception:
             return None
 
     def get_watched_containers(self) -> Tuple[List[Container], List[Container]]:
         """Finds containers using internal config for filtering. Returns (auto_update, monitor_only)."""
         auto_update = []
         monitor_only = []
+        
+        # Pre-compile regex for performance
+        exclude_re = None
+        if self.config and self.config.exclude_regex:
+            try:
+                exclude_re = re.compile(self.config.exclude_regex)
+            except:
+                logger.warning(f"Failed to compile exclude regex: {self.config.exclude_regex}")
+
         try:
             for c in self.client.containers.list():
                 labels = c.labels or {}
@@ -39,7 +49,9 @@ class DockerHandler:
                 # Critical Self-Protection: Skip our own container by ID, name, or specific label
                 if self.self_id and c.id == self.self_id: continue
                 if labels.get("watcher.self") == "true": continue
-                if self.config and c.name in self.config.exclude_names: continue
+                if self.config:
+                    if c.name in self.config.exclude_names: continue
+                    if exclude_re and exclude_re.search(c.name): continue
 
                 # Evaluate image reference via Config.Image or RepoTags
                 ref = self.get_image_ref(c)
@@ -258,9 +270,14 @@ class DockerHandler:
             try:
                 existing = self.client.containers.get(backup_name)
                 existing.remove(force=True)
-            except docker.errors.NotFound: pass
+            except docker.errors.NotFound: 
+                pass
+            except Exception as e:
+                logger.warning(f"Could not remove existing backup container {backup_name}: {e}")
+
             old.rename(backup_name)
-        except docker.errors.NotFound: pass
+        except docker.errors.NotFound: 
+            pass
         except Exception as e:
             raise RecreationError(f"Failed to stop/rename original container {name}: {e}")
 
@@ -304,7 +321,8 @@ class DockerHandler:
                     if new_container:
                         try:
                             new_container.remove(force=True)
-                        except: pass
+                        except Exception: 
+                            pass
                     
                     ca.pop("user")
                     continue

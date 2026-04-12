@@ -21,22 +21,27 @@ class Config:
         self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.dry_run = self._parse_bool("DRY_RUN", False)
         self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+        
+        # Notifications
         self.notify_updates_available = self._parse_bool("NOTIFY_UPDATES_AVAILABLE", True)
+        self.notify_on_update_start = self._parse_bool("NOTIFY_ON_UPDATE_START", True)
+        self.notify_summary_strategy = os.getenv("NOTIFY_SUMMARY_STRATEGY", "always").lower() # always, on_change, on_error
         
         # Registry Auth
         self.reg_user = os.getenv("REGISTRY_USERNAME")
         self.reg_pass = os.getenv("REGISTRY_PASSWORD")
         
-        # Selection
+        # Selection & Exclusion
         self.watch_by_label = self._parse_bool("WATCH_BY_LABEL", False)
         self.watch_label_key = os.getenv("WATCH_LABEL_KEY", "watcher.enable")
         self.watch_label_value = os.getenv("WATCH_LABEL_VALUE", "true")
         
-        # Self-Protection & Exclusions
         exclude_env = os.getenv("EXCLUDE_CONTAINER_NAMES", "")
         self.exclude_names = [n.strip() for n in exclude_env.split(",") if n.strip()]
         if "watcher" not in self.exclude_names:
             self.exclude_names.append("watcher")
+            
+        self.exclude_regex = os.getenv("EXCLUDE_CONTAINER_REGEX")
 
         # Dependency Restarts
         self.depends_on_label_key = os.getenv("DEPENDS_ON_LABEL_KEY", "watcher.depends_on")
@@ -47,6 +52,18 @@ class Config:
 
         # Cleanup
         self.cleanup_old_images = self._parse_bool("CLEANUP_OLD_IMAGES", False)
+        
+        # 1.6.0 Cooldown & Journal
+        self.failure_cooldown_seconds = self._parse_int("FAILURE_COOLDOWN_SECONDS", 3600)
+        self.max_retries_before_cooldown = self._parse_int("MAX_RETRIES_BEFORE_COOLDOWN", 1)
+        self.journal_enabled = self._parse_bool("JOURNAL_ENABLED", True)
+        self.journal_path = os.getenv("JOURNAL_PATH", "journal.json")
+        self.journal_max_entries = self._parse_int("JOURNAL_MAX_ENTRIES", 100)
+        
+        # New 1.6.0 Options
+        self.max_updates_per_cycle = self._parse_int("MAX_UPDATES_PER_CYCLE", 0) # 0 = unlimited
+        self.restart_dependents = self._parse_bool("RESTART_DEPENDENTS", True)
+        self.notify_on_startup = self._parse_bool("NOTIFY_ON_STARTUP", True)
 
         self._validate()
         
@@ -101,6 +118,24 @@ class Config:
         if self.ntfy_url:
             if not (self.ntfy_url.startswith("http://") or self.ntfy_url.startswith("https://")):
                 raise ConfigurationError("NTFY_URL must start with http:// or https://")
+
+        if bool(self.telegram_bot_token) != bool(self.telegram_chat_id):
+            raise ConfigurationError("Both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set to enable Telegram notifications.")
+
+        if self.exclude_regex:
+            try:
+                re.compile(self.exclude_regex)
+            except re.error as e:
+                raise ConfigurationError(f"Invalid EXCLUDE_CONTAINER_REGEX: {e}")
+
+        if self.max_updates_per_cycle < 0:
+            raise ConfigurationError("MAX_UPDATES_PER_CYCLE cannot be negative.")
+
+        if self.journal_max_entries < 1:
+            raise ConfigurationError("JOURNAL_MAX_ENTRIES must be at least 1.")
+
+        if self.notify_summary_strategy not in ("always", "on_change", "on_error"):
+            raise ConfigurationError("NOTIFY_SUMMARY_STRATEGY must be one of: always, on_change, on_error")
 
         if bool(self.reg_user) != bool(self.reg_pass):
             logger.warning("Registry authentication: Only one of REGISTRY_USERNAME or REGISTRY_PASSWORD is set. Auth might fail if both are required.")
