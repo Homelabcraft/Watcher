@@ -44,6 +44,8 @@ class Journal:
             # History rotation: Keep only the configured max_entries
             to_save = self._history[-self.max_entries:]
             self._history = to_save  # Truncate in memory too
+            
+            os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
             temp_path = f"{self.path}.tmp"
             with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump(to_save, f, indent=2, ensure_ascii=False)

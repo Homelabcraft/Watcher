@@ -2,15 +2,17 @@ import json
 import logging
 import os
 from datetime import datetime
+from typing import Dict, Any, Optional
+from models import UpdateStatus
 
 logger = logging.getLogger('Watcher.StateStore')
 
 class StateStore:
-    """Manages persistent state across Watcher restarts (e.g. cooldowns)."""
+    """Manages persistent state across Watcher restarts (e.g. cooldowns, transactions)."""
     
     def __init__(self, path: str):
         self.path = path
-        self._data = {"cooldowns": {}}
+        self._data = {"cooldowns": {}, "transactions": {}}
         self._load()
         
     def _load(self):
@@ -19,33 +21,37 @@ class StateStore:
                 with open(self.path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     if isinstance(data, dict):
+                        if "cooldowns" not in data or not isinstance(data["cooldowns"], dict):
+                            data["cooldowns"] = {}
+                        if "transactions" not in data or not isinstance(data["transactions"], dict):
+                            data["transactions"] = {}
+                            
                         # Convert ISO strings back to datetime
-                        if "cooldowns" in data:
-                            for k, v in data["cooldowns"].items():
-                                if "cooldown_until" in v and isinstance(v["cooldown_until"], str):
-                                    try:
-                                        v["cooldown_until"] = datetime.fromisoformat(v["cooldown_until"])
-                                    except ValueError:
-                                        v["cooldown_until"] = datetime.min
+                        for k, v in data["cooldowns"].items():
+                            if "cooldown_until" in v and isinstance(v["cooldown_until"], str):
+                                try:
+                                    v["cooldown_until"] = datetime.fromisoformat(v["cooldown_until"])
+                                except ValueError:
+                                    v["cooldown_until"] = datetime.min
                         self._data = data
                     else:
                         logger.warning(f"State store at {self.path} is invalid format. Backing up and resetting.")
                         import shutil
                         try: shutil.copy(self.path, f"{self.path}.corrupted")
                         except: pass
-                        self._data = {"cooldowns": {}}
+                        self._data = {"cooldowns": {}, "transactions": {}}
             except Exception as e:
                 logger.error(f"Failed to load state store: {e}")
                 logger.warning(f"State store at {self.path} is corrupted. Backing up and resetting.")
                 import shutil
                 try: shutil.copy(self.path, f"{self.path}.corrupted")
                 except: pass
-                self._data = {"cooldowns": {}}
+                self._data = {"cooldowns": {}, "transactions": {}}
 
     def _save(self):
         try:
             # Prepare data for JSON serialization (datetime to string)
-            to_save = {"cooldowns": {}}
+            to_save = {"cooldowns": {}, "transactions": self._data.get("transactions", {})}
             for k, v in self._data["cooldowns"].items():
                 to_save["cooldowns"][k] = {
                     "count": v.get("count", 0),
@@ -71,3 +77,31 @@ class StateStore:
     def set_cooldowns(self, cooldowns: dict):
         self._data["cooldowns"] = cooldowns
         self._save()
+        
+    def start_transaction(self, container_name: str, original_container_id: str):
+        """Starts an update transaction for a container."""
+        self._data["transactions"][container_name] = {
+            "container_name": container_name,
+            "original_container_id": original_container_id,
+            "backup_container_id": None,
+            "status": "prepared"
+        }
+        self._save()
+
+    def update_transaction(self, container_name: str, status: str, backup_container_id: Optional[str] = None):
+        """Updates the status of an ongoing transaction."""
+        if container_name in self._data["transactions"]:
+            self._data["transactions"][container_name]["status"] = status
+            if backup_container_id:
+                self._data["transactions"][container_name]["backup_container_id"] = backup_container_id
+            self._save()
+
+    def end_transaction(self, container_name: str):
+        """Removes a completed transaction."""
+        if container_name in self._data["transactions"]:
+            del self._data["transactions"][container_name]
+            self._save()
+
+    def get_transactions(self) -> Dict[str, Any]:
+        """Returns all ongoing transactions."""
+        return self._data.get("transactions", {})

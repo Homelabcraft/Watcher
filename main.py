@@ -149,6 +149,7 @@ class WatcherService:
             dependents = self.get_dependents([name], [old_id])
 
             # 3. Execution
+            self.state_store.start_transaction(name, old_id)
             info.error_step = "recreate"
             logger.info(f"Updating {name}...")
             if self.config.notify_on_update_start:
@@ -158,6 +159,7 @@ class WatcherService:
             new_container = self.docker.recreate(name, plan)
             if new_container:
                 info.new_id = new_container.id
+                self.state_store.update_transaction(name, "update_in_progress")
 
             # 4. Verification
             info.error_step = "health_check"
@@ -165,6 +167,7 @@ class WatcherService:
                 logger.info(f"Success: {name}")
                 self.docker.remove_backup(name)
                 
+                self.state_store.end_transaction(name)
                 # 5. Cleanup (Only after success)
                 if self.config.cleanup_old_images:
                     self.docker.remove_image(old_image_id)
@@ -385,26 +388,51 @@ class WatcherService:
         return (target_dt - now).total_seconds()
 
     def startup_recovery(self):
-        """Finds and resolves orphaned _backup containers from aborted updates."""
+        """Resolves aborted updates using StateStore transactions."""
         try:
-            for c in self.client.containers.list(all=True):
-                if c.name.endswith("_backup"):
-                    orig_name = c.name[:-7]
-                    logger.info(f"Found orphaned backup container: {c.name}. Checking original {orig_name}...")
-                    try:
-                        orig = self.client.containers.get(orig_name)
-                        if self.health.is_healthy(orig_name) or orig.status == "running":
-                            logger.info(f"Original {orig_name} seems to be running fine. Removing orphaned backup.")
-                            c.remove(force=True)
+            transactions = self.state_store.get_transactions()
+            if not transactions:
+                return
+
+            for name, tx in list(transactions.items()):
+                logger.warning(f"Found pending transaction for {name} in state {tx.get('status')}")
+                backup_name = f"{name}_backup"
+                
+                try:
+                    backup_c = self.client.containers.get(backup_name)
+                except docker.errors.NotFound:
+                    logger.warning(f"Backup container {backup_name} not found. Clearing transaction.")
+                    self.state_store.end_transaction(name)
+                    continue
+
+                try:
+                    orig_c = self.client.containers.get(name)
+                    
+                    if tx.get("status") == "prepared":
+                        # We prepared but haven't replaced. The main container is still the old one.
+                        # Wait, if we haven't replaced, backup might just be renaming in progress.
+                        # Actually just doing perform_rollback is safe.
+                        logger.warning(f"Restoring {name} from {backup_name}...")
+                        orig_c.remove(force=True)
+                        backup_c.rename(name)
+                        backup_c.start()
+                    else:
+                        # update_in_progress or rolled_back
+                        if self.health.is_healthy(name):
+                            logger.info(f"Container {name} is healthy. Removing backup.")
+                            backup_c.remove(force=True)
                         else:
-                            logger.warning(f"Original {orig_name} exists but is not healthy. Removing it and restoring backup.")
-                            orig.remove(force=True)
-                            c.rename(orig_name)
-                            c.start()
-                    except docker.errors.NotFound:
-                        logger.warning(f"Original {orig_name} missing. Restoring from backup {c.name}.")
-                        c.rename(orig_name)
-                        c.start()
+                            logger.warning(f"Container {name} is not healthy. Rolling back...")
+                            orig_c.remove(force=True)
+                            backup_c.rename(name)
+                            backup_c.start()
+                except docker.errors.NotFound:
+                    logger.warning(f"Original container {name} missing. Restoring from backup.")
+                    backup_c.rename(name)
+                    backup_c.start()
+
+                self.state_store.end_transaction(name)
+
         except Exception as e:
             logger.error(f"Error during startup recovery: {e}")
 

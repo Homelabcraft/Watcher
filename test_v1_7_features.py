@@ -247,6 +247,27 @@ class TestV1_7Features(unittest.TestCase):
         
         self.assertFalse(result) # Should return false early
 
+    def test_state_store_transactions(self):
+        """StateStore: Transaction lifecycle and JSON robustness."""
+        import json
+        with open(self.config.state_path, 'w') as f:
+            f.write("{invalid_json:")
+        
+        store = StateStore(self.config.state_path)
+        self.assertEqual(store.get_cooldowns(), {})
+        self.assertEqual(store.get_transactions(), {})
+        
+        store.start_transaction("my_app", "id_123")
+        txs = store.get_transactions()
+        self.assertIn("my_app", txs)
+        self.assertEqual(txs["my_app"]["status"], "prepared")
+        
+        store.update_transaction("my_app", "update_in_progress", "backup_456")
+        self.assertEqual(store.get_transactions()["my_app"]["status"], "update_in_progress")
+        
+        store.end_transaction("my_app")
+        self.assertEqual(store.get_transactions(), {})
+
 if __name__ == '__main__':
 
 
