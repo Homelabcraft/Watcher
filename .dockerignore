@@ -1,0 +1,13 @@
+.env
+.git
+.dockerignore
+data/
+journal.json
+cooldowns.json
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+test_*.py
+TEST_GUIDE.md
+release_notes_*.txt
