@@ -249,8 +249,12 @@ class WatcherService:
 
     def perform_rollback(self, name: str, old_id: str) -> tuple[bool, str]:
         """Rollback using the saved backup container."""
+        from exceptions import StateStoreError
         logger.warning(f"ROLLBACK for {name}")
-        self.state_store.update_transaction(name, "rollback_started")
+        try:
+            self.state_store.update_transaction(name, "rollback_started")
+        except StateStoreError as e:
+            logger.error(f"StateStoreError during rollback_started for {name}: {e}. Proceeding with physical rollback anyway to ensure reliability.")
         self.notifier.notify_rollback(name, "started")
         try:
             tx = self.state_store.get_transactions().get(name, {})
@@ -515,8 +519,12 @@ class WatcherService:
                             
                         if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                             logger.info(f"New container {name} is healthy. Removing backup.")
-                            self.docker.remove_backup(name)
-                            self.state_store.end_transaction(name)
+                            if self.docker.remove_backup(name):
+                                self.state_store.end_transaction(name)
+                            else:
+                                logger.error(f"Failed to remove backup {name}_backup after successful recovery. Retaining transaction in phase replacement_verified.")
+                                self.state_store.update_transaction(name, "replacement_verified")
+                                self.notifier.notify_summary("⚠️ Recovery Warning", f"Container {name} recovered, but backup cleanup failed.")
                             continue
                         else:
                             logger.warning(f"New container {name} is not healthy. Rolling back...")

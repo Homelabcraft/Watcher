@@ -169,6 +169,38 @@ class TestV17Recovery(unittest.TestCase):
         self.assertFalse(success)
         self.assertEqual(self.service.state_store.get_transactions()["app"]["phase"], "rollback_failed")
 
+    def test_rollback_despite_statestore_error(self):
+        """Rollback physisch ausgeführt, auch wenn rollback_started Speichern fehlschlägt"""
+        from exceptions import StateStoreError
+        self.service.state_store.start_transaction("app", "orig_123", "img_1")
+        self.service.state_store.update_transaction("app", "replacement_verified", backup_container_id="orig_123")
+        
+        mock_backup = MagicMock()
+        mock_backup.id = "orig_123"
+        mock_backup.image.id = "img_1"
+        
+        def get_container(name):
+            if name == "app_backup": return mock_backup
+            raise docker.errors.NotFound("Not found")
+            
+        self.mock_client.containers.get.side_effect = get_container
+        
+        # mock update_transaction to fail on 'rollback_started'
+        original_update = self.service.state_store.update_transaction
+        def mock_update(name, phase, **kwargs):
+            if phase == "rollback_started":
+                raise StateStoreError("Disk full")
+            original_update(name, phase, **kwargs)
+            
+        with patch.object(self.service.state_store, 'update_transaction', side_effect=mock_update):
+            with patch.object(self.service.health, 'wait_for_health', return_value=True):
+                success, _ = self.service.perform_rollback("app", "img_1")
+                
+        # the rollback still works!
+        self.assertTrue(success)
+        mock_backup.rename.assert_called_with("app")
+        mock_backup.start.assert_called_once()
+
     def test_transaction_deleted_only_after_verification(self):
         """Transaktion wird erst nach erfolgreicher Prüfung gelöscht"""
         self.service.state_store.start_transaction("app", "orig_123", "img_1")
@@ -190,6 +222,30 @@ class TestV17Recovery(unittest.TestCase):
             self.service.startup_recovery()
             
         self.assertNotIn("app", self.service.state_store.get_transactions())
+
+    def test_transaction_retained_on_remove_backup_false(self):
+        """Neuer Container ist gesund, remove_backup liefert False, Transaktion bleibt replacement_verified erhalten"""
+        self.service.state_store.start_transaction("app", "orig_123", "img_1")
+        self.service.state_store.update_transaction("app", "replacement_started", backup_container_id="orig_123", new_container_id="new_456")
+        
+        mock_backup = MagicMock()
+        mock_backup.id = "orig_123"
+        mock_backup.image.id = "img_1"
+        mock_orig = MagicMock()
+        mock_orig.id = "new_456"
+        
+        def get_container(name):
+            if name == "app_backup": return mock_backup
+            if name == "app": return mock_orig
+            raise docker.errors.NotFound("Not found")
+        self.mock_client.containers.get.side_effect = get_container
+        
+        with patch.object(self.service.health, 'wait_for_health', return_value=True):
+            with patch.object(self.service.docker, 'remove_backup', return_value=False):
+                self.service.startup_recovery()
+            
+        self.assertIn("app", self.service.state_store.get_transactions())
+        self.assertEqual(self.service.state_store.get_transactions()["app"]["phase"], "replacement_verified")
 
     def test_foreign_backup_ignored(self):
         """Fremder _backup Container bleibt unangetastet"""

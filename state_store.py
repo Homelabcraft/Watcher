@@ -79,40 +79,64 @@ class StateStore:
         return self._data["cooldowns"]
 
     def set_cooldowns(self, cooldowns: dict):
-        self._data["cooldowns"] = cooldowns
-        self._save()
+        import copy
+        old_data = copy.deepcopy(self._data)
+        try:
+            self._data["cooldowns"] = cooldowns
+            self._save()
+        except StateStoreError:
+            self._data = old_data
+            raise
         
     def start_transaction(self, container_name: str, original_container_id: str, original_image_id: str):
         """Starts an update transaction for a container."""
+        import copy
+        old_data = copy.deepcopy(self._data)
         transaction_id = str(uuid.uuid4())
-        self._data["transactions"][container_name] = {
-            "transaction_id": transaction_id,
-            "container_name": container_name,
-            "original_container_id": original_container_id,
-            "original_image_id": original_image_id,
-            "backup_name": f"{container_name}_backup",
-            "backup_container_id": None,
-            "new_container_id": None,
-            "new_image_id": None,
-            "phase": "prepared",
-            "created_at": datetime.now().isoformat()
-        }
-        self._save()
+        try:
+            self._data["transactions"][container_name] = {
+                "transaction_id": transaction_id,
+                "container_name": container_name,
+                "original_container_id": original_container_id,
+                "original_image_id": original_image_id,
+                "backup_name": f"{container_name}_backup",
+                "backup_container_id": None,
+                "new_container_id": None,
+                "new_image_id": None,
+                "phase": "prepared",
+                "created_at": datetime.now().isoformat()
+            }
+            self._save()
+        except StateStoreError:
+            self._data = old_data
+            raise
 
     def update_transaction(self, container_name: str, phase: str, **kwargs):
         """Updates the status and optional fields of an ongoing transaction."""
+        import copy
         if container_name in self._data["transactions"]:
-            self._data["transactions"][container_name]["phase"] = phase
-            for k, v in kwargs.items():
-                if v is not None:
-                    self._data["transactions"][container_name][k] = v
-            self._save()
+            old_data = copy.deepcopy(self._data)
+            try:
+                self._data["transactions"][container_name]["phase"] = phase
+                for k, v in kwargs.items():
+                    if v is not None:
+                        self._data["transactions"][container_name][k] = v
+                self._save()
+            except StateStoreError:
+                self._data = old_data
+                raise
 
     def end_transaction(self, container_name: str):
         """Removes a completed transaction."""
+        import copy
         if container_name in self._data["transactions"]:
-            del self._data["transactions"][container_name]
-            self._save()
+            old_data = copy.deepcopy(self._data)
+            try:
+                del self._data["transactions"][container_name]
+                self._save()
+            except StateStoreError:
+                self._data = old_data
+                raise
 
     def get_transactions(self) -> Dict[str, Any]:
         """Returns all ongoing transactions."""

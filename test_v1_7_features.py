@@ -297,6 +297,52 @@ class TestV1_7Features(unittest.TestCase):
         if os.path.exists("tmp_state.json"):
             os.remove("tmp_state.json")
 
+    def test_state_store_start_tx_rollback(self):
+        """fehlgeschlagenes start_transaction verändert In-Memory-State nicht"""
+        if os.path.exists("tmp_start.json"): os.remove("tmp_start.json")
+        from state_store import StateStore
+        from exceptions import StateStoreError
+        store = StateStore("tmp_start.json")
+        store._save = MagicMock(side_effect=StateStoreError("fail"))
+        with self.assertRaises(StateStoreError):
+            store.start_transaction("app", "1", "2")
+        self.assertNotIn("app", store.get_transactions())
+
+    def test_state_store_update_tx_rollback(self):
+        """fehlgeschlagenes update_transaction behält vorherige Phase"""
+        if os.path.exists("tmp_update.json"): os.remove("tmp_update.json")
+        from state_store import StateStore
+        from exceptions import StateStoreError
+        store = StateStore("tmp_update.json")
+        store.start_transaction("app", "1", "2")
+        store._save = MagicMock(side_effect=StateStoreError("fail"))
+        with self.assertRaises(StateStoreError):
+            store.update_transaction("app", "backup_renamed")
+        self.assertEqual(store.get_transactions()["app"]["phase"], "prepared")
+
+    def test_state_store_end_tx_rollback(self):
+        """fehlgeschlagenes end_transaction behält Transaktion"""
+        if os.path.exists("tmp_end.json"): os.remove("tmp_end.json")
+        from state_store import StateStore
+        from exceptions import StateStoreError
+        store = StateStore("tmp_end.json")
+        store.start_transaction("app", "1", "2")
+        store._save = MagicMock(side_effect=StateStoreError("fail"))
+        with self.assertRaises(StateStoreError):
+            store.end_transaction("app")
+        self.assertIn("app", store.get_transactions())
+
+    def test_state_store_set_cooldowns_rollback(self):
+        """fehlgeschlagenes set_cooldowns behält vorherige Cooldowns"""
+        if os.path.exists("tmp_cool.json"): os.remove("tmp_cool.json")
+        from state_store import StateStore
+        from exceptions import StateStoreError
+        store = StateStore("tmp_cool.json")
+        store._save = MagicMock(side_effect=StateStoreError("fail"))
+        with self.assertRaises(StateStoreError):
+            store.set_cooldowns({"app": {"count": 1}})
+        self.assertEqual(store.get_cooldowns(), {})
+
     def test_missing_original_container_prevents_recreate(self):
         """fehlender Originalcontainer verhindert recreate"""
         from docker_handler import DockerHandler
