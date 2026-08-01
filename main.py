@@ -165,7 +165,15 @@ class WatcherService:
             if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                 logger.info(f"Success: {name}")
                 self.state_store.update_transaction(name, "replacement_verified")
-                self.docker.remove_backup(name)
+                
+                if not self.docker.remove_backup(name):
+                    self.notifier.notify_summary("⚠️ Backup Removal Failed", f"Could not remove {name}_backup. Transaction retained.")
+                    info.status = UpdateStatus.FAILED
+                    info.error_message = "Backup removal failed"
+                    info.error_step = "cleanup"
+                    info.duration_sec = time.perf_counter() - start_time
+                    self.notifier.notify_update_failure(info)
+                    return info
                 
                 self.state_store.end_transaction(name)
                 # 5. Cleanup (Only after success)
@@ -245,29 +253,60 @@ class WatcherService:
         self.state_store.update_transaction(name, "rollback_started")
         self.notifier.notify_rollback(name, "started")
         try:
+            tx = self.state_store.get_transactions().get(name, {})
+            new_container_id = tx.get("new_container_id")
+            original_container_id = tx.get("original_container_id")
+            backup_container_id = tx.get("backup_container_id")
+            original_image_id = tx.get("original_image_id")
+            
             # 1. Inspect current container under target name
             try:
                 current_container = self.client.containers.get(name)
-                # Check image ID to see if update actually happened
-                if current_container.image.id == old_id:
-                    logger.info(f"Original container {name} is still in place (rename likely failed). Starting it...")
-                    current_container.start()
-                    msg = "Original container recovered (update didn't complete)."
-                    self.notifier.notify_rollback(name, "success", msg)
-                    self.state_store.end_transaction(name)
-                    return True, msg
-                else:
+                if new_container_id and current_container.id == new_container_id:
                     logger.info(f"Removing failed new container {name}...")
                     current_container.remove(force=True)
+                elif current_container.id == original_container_id and current_container.image.id == original_image_id:
+                    logger.info(f"Original container {name} is still in place. Verifying it...")
+                    current_container.start()
+                    if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                        msg = "Original container recovered successfully."
+                        self.notifier.notify_rollback(name, "success", msg)
+                        self.state_store.end_transaction(name)
+                        return True, msg
+                    else:
+                        msg = "Original container failed health check after rollback."
+                        self.notifier.notify_rollback(name, "failed", msg)
+                        self.state_store.update_transaction(name, 'rollback_failed')
+                        return False, msg
+                else:
+                    logger.error(f"Container {name} exists but does not match any valid IDs. Retaining.")
+                    msg = "Rollback failed: Identity mismatch for main container."
+                    self.notifier.notify_rollback(name, "failed", msg)
+                    self.state_store.update_transaction(name, 'rollback_failed')
+                    return False, msg
+                    
             except docker.errors.NotFound:
                 logger.debug(f"No container found with name {name} during rollback, proceeding to restore backup.")
             except Exception as e:
                 logger.error(f"Error handling current container during rollback: {e}")
+                msg = f"Rollback failed: {e}"
+                self.notifier.notify_rollback(name, "failed", msg)
+                self.state_store.update_transaction(name, 'rollback_failed')
+                return False, msg
 
             # 2. Restore backup
             backup_name = f"{name}_backup"
             try:
                 backup = self.client.containers.get(backup_name)
+                
+                valid_backup_ids = {id_ for id_ in [original_container_id, backup_container_id] if id_}
+                if not valid_backup_ids or backup.id not in valid_backup_ids or backup.image.id != original_image_id:
+                    logger.error(f"Backup container {backup_name} identity mismatch! Refusing to restore.")
+                    msg = "Rollback failed: Backup identity mismatch."
+                    self.notifier.notify_rollback(name, "failed", msg)
+                    self.state_store.update_transaction(name, 'rollback_failed')
+                    return False, msg
+                
                 logger.info(f"Found backup {backup_name}. Restoring...")
                 
                 # Perform rename and start defensively
@@ -433,8 +472,18 @@ class WatcherService:
                         try:
                             orig_c = self.client.containers.get(name)
                             if orig_c.id == orig_id and orig_c.image.id == tx.get("original_image_id"):
-                                logger.info(f"Phase was prepared and main container matches original. Removing transaction {name}.")
-                                self.state_store.end_transaction(name)
+                                logger.info(f"Phase was prepared and main container matches original. Reloading and verifying health.")
+                                orig_c.reload()
+                                if orig_c.status != "running":
+                                    logger.info(f"Container {name} is stopped. Starting it...")
+                                    orig_c.start()
+                                    
+                                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                                    logger.info(f"Main container {name} is healthy. Removing transaction.")
+                                    self.state_store.end_transaction(name)
+                                else:
+                                    logger.error(f"Main container {name} failed health check. Retaining transaction.")
+                                    self.state_store.update_transaction(name, "rollback_failed")
                             else:
                                 logger.error(f"Main container {name} does not match original IDs. Retaining transaction.")
                         except docker.errors.NotFound:
@@ -446,9 +495,14 @@ class WatcherService:
                 try:
                     orig_c = self.client.containers.get(name)
                     if phase in ["prepared", "backup_renamed"]:
+                        new_container_id = tx.get("new_container_id")
+                        if not new_container_id or orig_c.id != new_container_id:
+                            logger.error(f"Main container {name} exists but no valid new_container_id is recorded in phase {phase}. Retaining transaction.")
+                            self.notifier.notify_summary("🚨 Recovery Error", f"Unexpected main container {name} found during {phase}. Aborting automatic recovery.")
+                            continue
+                            
                         logger.warning(f"Restoring {name} from {backup_name}...")
-                        if orig_c.id != backup_c.id:
-                            orig_c.remove(force=True)
+                        orig_c.remove(force=True)
                         backup_c.rename(name)
                         backup_c.start()
                     else:
@@ -461,7 +515,7 @@ class WatcherService:
                             
                         if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                             logger.info(f"New container {name} is healthy. Removing backup.")
-                            backup_c.remove(force=True)
+                            self.docker.remove_backup(name)
                             self.state_store.end_transaction(name)
                             continue
                         else:

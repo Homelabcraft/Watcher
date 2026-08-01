@@ -50,7 +50,7 @@ Add these labels to the containers you want to manage:
 ```yaml
 services:
   database:
-    image: postgres:16
+    image: postgres:latest
     labels:
       - "watcher.enable=false" # Monitor only: Receive alerts if updates exist, but don't auto-update.
 
@@ -63,7 +63,7 @@ services:
 
 ---
 
-## 🚀 Key Features (v1.6)
+## 🚀 Key Features (v1.7)
 
 *   **📔 Update Journal:** Persistent local history of every scan cycle and update result in `journal.json`.
 *   **❄️ Failure Cooldown:** Prevents aggressive retries of failing containers via configurable `FAILURE_COOLDOWN_SECONDS`.

@@ -72,6 +72,7 @@ class StateStore:
             if os.path.exists(f"{self.path}.tmp"):
                 try: os.remove(f"{self.path}.tmp")
                 except: pass
+            raise IOError(f"Atomic save failed for state store: {e}")
 
     def get_cooldowns(self) -> dict:
         return self._data["cooldowns"]

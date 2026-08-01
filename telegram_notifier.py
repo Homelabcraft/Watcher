@@ -120,29 +120,32 @@ class TelegramNotifier:
         if plan.updates_available:
             lines.append("\nWould Update:")
             for u in plan.updates_available:
+                safe_name = html.escape(u.name)
                 if u.old_image_short_id and u.new_image_short_id:
-                    lines.append(f"- {u.name} (<code>{u.old_image_short_id}</code> -> <code>{u.new_image_short_id}</code>)")
+                    lines.append(f"- {safe_name} (<code>{html.escape(u.old_image_short_id)}</code> -> <code>{html.escape(u.new_image_short_id)}</code>)")
                 else:
-                    lines.append(f"- {u.name} (Update found)")
+                    lines.append(f"- {safe_name} (Update found)")
 
         if plan.monitored_only:
             lines.append("\nMonitored Only:")
             for u in plan.monitored_only:
+                safe_name = html.escape(u.name)
                 if u.old_image_short_id and u.new_image_short_id:
-                    lines.append(f"- {u.name} (<code>{u.old_image_short_id}</code> -> <code>{u.new_image_short_id}</code>)")
+                    lines.append(f"- {safe_name} (<code>{html.escape(u.old_image_short_id)}</code> -> <code>{html.escape(u.new_image_short_id)}</code>)")
                 else:
-                    lines.append(f"- {u.name} (Update found)")
+                    lines.append(f"- {safe_name} (Update found)")
 
         if plan.dependents_to_restart:
-            lines.append(f"\nWould Restart Dependents: {', '.join(plan.dependents_to_restart)}")
+            safe_deps = [html.escape(d) for d in plan.dependents_to_restart]
+            lines.append(f"\nWould Restart Dependents: {', '.join(safe_deps)}")
 
         if next_run:
-            lines.append(f"\nNext scheduled run: {next_run}")
+            lines.append(f"\nNext scheduled run: {html.escape(next_run)}")
 
         self._send("📋 Dry Run Execution Plan", "\n".join(lines))
 
     def notify_summary(self, title: str, message: str) -> None:
-        self._send(title, message)
+        self._send(title, html.escape(message))
 
     def notify_startup(self, config: dict, hostname: str) -> None:
         iv = config.get("check_interval", 0)
@@ -156,8 +159,8 @@ class TelegramNotifier:
         
         self._send(
             "🚀 Watcher started",
-            f"Host: <code>{hostname}</code>\nMode: <code>{mode}</code>\nInterval/Time: {time_info}\nDry Run: {'Active' if config.get('dry_run') else 'Disabled'}"
+            f"Host: <code>{html.escape(hostname)}</code>\nMode: <code>{html.escape(mode)}</code>\nInterval/Time: {html.escape(time_info)}\nDry Run: {'Active' if config.get('dry_run') else 'Disabled'}"
         )
 
     def notify_shutdown(self, reason: str = "Stopped by user (Ctrl+C).") -> None:
-        self._send("🛑 Watcher stopped", reason)
+        self._send("🛑 Watcher stopped", html.escape(reason))

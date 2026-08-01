@@ -315,7 +315,7 @@ class DockerHandler:
             if state_store:
                 state_store.update_transaction(name, "backup_renamed", backup_container_id=old.id)
         except docker.errors.NotFound: 
-            pass
+            raise RecreationError(f"Original container {name} not found. Cannot proceed with recreation.")
         except Exception as e:
             raise RecreationError(f"Failed to stop/rename original container {name}: {e}")
 
@@ -385,17 +385,20 @@ class DockerHandler:
         
         raise RecreationError(f"Failed to recreate {name} after {max_attempts} attempts.")
 
-    def remove_backup(self, name: str):
+    def remove_backup(self, name: str) -> bool:
         """Removes the backup container after a successful update."""
+        if self.dry_run: return True
         backup_name = f"{name}_backup"
         try:
             backup = self.client.containers.get(backup_name)
             backup.remove(force=True)
             logger.info(f"Removed backup container {backup_name}")
+            return True
         except docker.errors.NotFound:
-            pass
+            return True
         except Exception as e:
-            logger.warning(f"Failed to remove backup {backup_name}: {e}")
+            logger.error(f"Failed to remove backup {backup_name}: {e}")
+            return False
 
     def remove_image(self, image_id: str):
         """Removes an old image if possible."""

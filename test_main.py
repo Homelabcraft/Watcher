@@ -59,8 +59,12 @@ class TestWatcherService(unittest.TestCase):
         self.service.perform_rollback.assert_called_once_with("test_app", "old_image_hash")
 
     def test_perform_rollback_rename_failure(self, mock_post):
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1")
+        self.service.state_store.update_transaction("test_app", "replacement_verified", backup_container_id="old_image_hash", original_image_id="img_1")
+        
         mock_current = MagicMock()
-        mock_current.image.id = "old_image_hash"
+        mock_current.id = "old_image_hash"
+        mock_current.image.id = "img_1"
         self.mock_client.containers.get.side_effect = [mock_current]
         
         self.service.perform_rollback("test_app", "old_image_hash")
@@ -69,10 +73,16 @@ class TestWatcherService(unittest.TestCase):
         mock_current.remove.assert_not_called()
 
     def test_perform_rollback_success(self, mock_post):
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1")
+        self.service.state_store.update_transaction("test_app", "replacement_verified", backup_container_id="old_image_hash", new_container_id="new_123", original_image_id="img_1")
+        
         mock_current = MagicMock()
+        mock_current.id = "new_123"
         mock_current.image.id = "new_image_hash"
         
         mock_backup = MagicMock()
+        mock_backup.id = "old_image_hash"
+        mock_backup.image.id = "img_1"
         
         self.mock_client.containers.get.side_effect = [mock_current, mock_backup]
         self.service.health.wait_for_health = MagicMock(return_value=True)

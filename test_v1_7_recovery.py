@@ -34,7 +34,7 @@ class TestV17Recovery(unittest.TestCase):
     def test_recovery_matching_ids(self):
         """Recovery mit übereinstimmenden IDs"""
         self.service.state_store.start_transaction("app", "orig_123", "img_1")
-        self.service.state_store.update_transaction("app", "backup_renamed", backup_container_id="orig_123")
+        self.service.state_store.update_transaction("app", "backup_renamed", backup_container_id="orig_123", new_container_id="new_456")
         
         mock_backup = MagicMock()
         mock_backup.id = "orig_123"
@@ -237,16 +237,17 @@ class TestV17Recovery(unittest.TestCase):
     def test_backup_id_none_original_id_matches(self):
         """backup_container_id ist None, original_container_id stimmt"""
         self.service.state_store.start_transaction("app", "orig_123", "img_1")
-        self.service.state_store.update_transaction("app", "backup_renamed") # leaves backup_container_id=None
+        self.service.state_store.update_transaction("app", "backup_renamed", new_container_id="new_456")
+        
+        # Simuliere Zustand vor dem Start des Replacements
+        self.service.state_store.get_transactions()["app"]["backup_container_id"] = None
         
         mock_backup = MagicMock()
         mock_backup.id = "orig_123"
         mock_backup.image.id = "img_1"
-        mock_backup.name = "app_backup"
         
         mock_orig = MagicMock()
         mock_orig.id = "new_456"
-        mock_orig.name = "app"
         
         def get_container(name):
             if name == "app_backup": return mock_backup
@@ -361,7 +362,8 @@ class TestV17Recovery(unittest.TestCase):
             raise docker.errors.NotFound("Not found")
         self.mock_client.containers.get.side_effect = get_container
         
-        self.service.startup_recovery()
+        with patch.object(self.service.health, 'wait_for_health', return_value=True):
+            self.service.startup_recovery()
         
         # Transaction should be removed because original is correct and we didn't touch it
         self.assertNotIn("app", self.service.state_store.get_transactions())
