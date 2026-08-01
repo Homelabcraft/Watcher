@@ -1,15 +1,16 @@
 import logging
+import re
+import socket
+from typing import List, Optional, Tuple
+
 import docker
 import docker.errors
-import socket
 import requests
-import re
-from docker.types import Mount, Ulimit, LogConfig
 from docker.models.containers import Container
-from typing import Optional, List, Tuple
+from docker.types import LogConfig, Mount, Ulimit
 
-from models import UpdateStatus
 from exceptions import RecreationError
+from models import UpdateStatus
 
 logger = logging.getLogger('Watcher.Docker')
 

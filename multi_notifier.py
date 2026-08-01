@@ -1,6 +1,7 @@
 import logging
-from notifier_protocol import Notifier
+
 from models import ContainerUpdateInfo, ExecutionPlan
+from notifier_protocol import Notifier
 
 logger = logging.getLogger("Watcher.MultiNotifier")
 

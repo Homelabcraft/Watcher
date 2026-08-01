@@ -1,5 +1,6 @@
 import logging
 import time
+
 import docker
 
 logger = logging.getLogger('Watcher.Health')

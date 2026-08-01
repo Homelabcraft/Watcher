@@ -1,6 +1,8 @@
 import logging
-import requests
 from typing import Optional
+
+import requests
+
 from models import ContainerUpdateInfo, ExecutionPlan
 
 logger = logging.getLogger("Watcher.Slack")
@@ -86,10 +88,10 @@ class SlackNotifier:
         lines = [f"📊 *Watcher Scan Summary* (Duration: `{duration_sec:.1f}s`)"]
         if summary.get("reported"):
             reported_formatted = [format_info(n) for n in summary['reported']]
-            lines.append(f"\n*Updates available (not auto-updated):*\n- " + "\n- ".join(reported_formatted))
+            lines.append("\n*Updates available (not auto-updated):*\n- " + "\n- ".join(reported_formatted))
         if summary["updated"]:
             updated_formatted = [format_info(n) for n in summary['updated']]
-            lines.append(f"\n*Updated:*\n- " + "\n- ".join(updated_formatted))
+            lines.append("\n*Updated:*\n- " + "\n- ".join(updated_formatted))
         if summary["failed"]:
             lines.append(f"\n*Failed:* {', '.join(summary['failed'])}")
         if summary["rolled_back"]:
@@ -100,7 +102,7 @@ class SlackNotifier:
         if not plan.updates_available and not plan.monitored_only:
             return
 
-        lines = [f"📋 *Dry Run Execution Plan*"]
+        lines = ["📋 *Dry Run Execution Plan*"]
         lines.append(f"Containers checked: {plan.checked_containers}")
         
         if plan.updates_available:
@@ -120,7 +122,7 @@ class SlackNotifier:
                     lines.append(f"- *{u.name}* (Update found)")
 
         if plan.dependents_to_restart:
-            lines.append(f"\n*Would Restart Dependents:*")
+            lines.append("\n*Would Restart Dependents:*")
             lines.append(f"- {', '.join(plan.dependents_to_restart)}")
 
         if next_run:

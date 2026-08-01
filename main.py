@@ -1,23 +1,22 @@
-import time
 import logging
-import docker
-import sys
 import signal
-import threading
 import socket
-import re
+import sys
+import threading
+import time
 from datetime import datetime, timedelta
-from typing import Optional
+
+import docker
+from docker.models.containers import Container
 
 from config import Config
-from notifier_factory import build_notifier
-from state_store import StateStore
 from docker_handler import DockerHandler
+from exceptions import ConfigurationError, RecreationError
 from health_monitor import HealthMonitor
 from journal import Journal
-from docker.models.containers import Container
-from models import UpdateStatus, ContainerUpdateInfo, ExecutionPlan
-from exceptions import ConfigurationError, RecreationError
+from models import ContainerUpdateInfo, ExecutionPlan, UpdateStatus
+from notifier_factory import build_notifier
+from state_store import StateStore
 
 # Logger setup
 logging.basicConfig(
@@ -542,7 +541,7 @@ class WatcherService:
                         try:
                             orig_c = self.client.containers.get(name)
                             if orig_c.id == orig_id and orig_c.image.id == tx.get("original_image_id"):
-                                logger.info(f"Phase was prepared and main container matches original. Reloading and verifying health.")
+                                logger.info("Phase was prepared and main container matches original. Reloading and verifying health.")
                                 orig_c.reload()
                                 if orig_c.status != "running":
                                     logger.info(f"Container {name} is stopped. Starting it...")

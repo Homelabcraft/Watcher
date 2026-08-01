@@ -1,5 +1,7 @@
 from typing import Protocol, runtime_checkable
+
 from models import ContainerUpdateInfo, ExecutionPlan
+
 
 @runtime_checkable
 class Notifier(Protocol):

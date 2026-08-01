@@ -1,6 +1,8 @@
 import logging
-import requests
 from typing import Optional
+
+import requests
+
 from models import ContainerUpdateInfo, ExecutionPlan
 
 logger = logging.getLogger("Watcher.Ntfy")

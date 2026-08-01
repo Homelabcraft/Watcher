@@ -1,8 +1,10 @@
-import logging
-import requests
 import datetime
+import logging
 from typing import Optional
-from models import ExecutionPlan, ContainerUpdateInfo, UpdateStatus
+
+import requests
+
+from models import ContainerUpdateInfo, ExecutionPlan
 
 logger = logging.getLogger('Watcher.Discord')
 
@@ -99,10 +101,10 @@ class DiscordNotifier:
 
         if summary.get("reported"):
             reported_formatted = [format_info(n) for n in summary['reported']]
-            lines.append(f"\n👀 **Updates Available (Not Auto-Updated):**\n- " + "\n- ".join(reported_formatted))
+            lines.append("\n👀 **Updates Available (Not Auto-Updated):**\n- " + "\n- ".join(reported_formatted))
         if summary["updated"]:
             updated_formatted = [format_info(n) for n in summary['updated']]
-            lines.append(f"\n✅ **Updated:**\n- " + "\n- ".join(updated_formatted))
+            lines.append("\n✅ **Updated:**\n- " + "\n- ".join(updated_formatted))
         if summary["failed"]:
             lines.append(f"\n❌ **Failed:** {', '.join(summary['failed'])}")
         if summary.get("rolled_back"):
@@ -116,7 +118,7 @@ class DiscordNotifier:
         if not plan.updates_available and not plan.monitored_only:
             return
 
-        lines = [f"📋 **Dry Run Execution Plan**"]
+        lines = ["📋 **Dry Run Execution Plan**"]
         lines.append(f"Containers checked: {plan.checked_containers}")
         
         if plan.updates_available:
@@ -136,7 +138,7 @@ class DiscordNotifier:
                     lines.append(f"- **{u.name}** (Update found)")
 
         if plan.dependents_to_restart:
-            lines.append(f"\n🔗 **Would Restart Dependents:**")
+            lines.append("\n🔗 **Would Restart Dependents:**")
             lines.append(f"- {', '.join(plan.dependents_to_restart)}")
             
         if next_run:

@@ -2,6 +2,7 @@
 
 from models import ContainerUpdateInfo, ExecutionPlan
 
+
 class NoopNotifier:
     def notify_scan_started(self, total_containers: int, run_mode: str) -> None:
         pass

@@ -1,6 +1,7 @@
-from enum import Enum, auto
 from dataclasses import dataclass, field
-from typing import Optional, List
+from enum import Enum, auto
+from typing import List, Optional
+
 
 class UpdateStatus(Enum):
     NO_UPDATE = auto()

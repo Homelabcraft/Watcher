@@ -3,7 +3,8 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any, Dict
+
 from exceptions import StateStoreError
 
 logger = logging.getLogger('Watcher.StateStore')

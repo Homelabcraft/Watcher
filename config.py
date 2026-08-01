@@ -1,7 +1,9 @@
-import os
 import logging
+import os
 import re
+
 from dotenv import load_dotenv
+
 from exceptions import ConfigurationError
 
 load_dotenv()
