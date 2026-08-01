@@ -1,24 +1,30 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
-import docker
-import os
 
-# Mock environment variables to prevent loading real config
-os.environ["DISCORD_WEBHOOK_URL"] = "http://mock"
-os.environ["CHECK_INTERVAL"] = "60"
+# Env setup moved to setUp
 
 from main import WatcherService
-from models import UpdateStatus, ContainerUpdateInfo
+from models import ContainerUpdateInfo, UpdateStatus
+
 
 @patch('discord_notifier.requests.post')
 class TestWatcherService(unittest.TestCase):
     @patch('main.docker.from_env')
     def setUp(self, mock_docker):
+        self.old_env = os.environ.copy()
+        os.environ["DISCORD_WEBHOOK_URL"] = "http://mock"
+        os.environ["CHECK_INTERVAL"] = "60"
+        
         self.mock_client = MagicMock()
         mock_docker.return_value = self.mock_client
         self.service = WatcherService()
         self.service.config.health_check_retries = 1
         self.service.config.health_check_delay = 0
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.old_env)
 
     def test_process_container_success(self, mock_post):
         mock_container = MagicMock()

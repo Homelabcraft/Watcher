@@ -42,7 +42,7 @@ git clone https://github.com/Homelabcraft/Watcher.git
 cd Watcher
 cp .env.example .env
 # Edit .env with your Discord/Slack/Telegram/Ntfy webhook URL
-docker-compose up -d
+docker compose up -d
 ```
 
 ### 2. Example Configuration
@@ -97,7 +97,7 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | :--- | :--- | :--- |
 | `CHECK_INTERVAL` | `86400` | Scan frequency in seconds (Default: 24h). Ignored if `SCHEDULE_TIME` is set. |
 | `SCHEDULE_TIME`  | `""`    | Optional: Run Watcher once daily at this specific local time (e.g. `03:00`). |
-| `WATCH_BY_LABEL` | `true`  | If true, only containers with `watcher.enable=true` are updated. |
+| `WATCH_BY_LABEL` | `false`  | If true, only containers with `watcher.enable=true` are updated. |
 | `DRY_RUN`        | `false` | Generates a detailed Execution Plan to your configured messengers. |
 | `STATE_PATH` | `/app/data/state.json` | Path to persistent state file for recovery. |
 | `ALLOW_USER_FALLBACK` | `false` | If true, permits recreating a container as `root` if the configured user is missing in the new image. |

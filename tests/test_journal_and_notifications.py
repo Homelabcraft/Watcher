@@ -1,16 +1,18 @@
-import unittest
-from unittest.mock import MagicMock, patch
 import json
 import os
-import re
+import unittest
 from datetime import datetime, timedelta
-from main import WatcherService
+from unittest.mock import MagicMock, patch
+
 from config import Config
-from models import UpdateStatus, ContainerUpdateInfo
 from exceptions import ConfigurationError
+from main import WatcherService
+from models import ContainerUpdateInfo, UpdateStatus
+
 
 class TestV1_6Features(unittest.TestCase):
     def setUp(self):
+        self.old_env = os.environ.copy()
         # Mock docker environment
         self.mock_docker_client = MagicMock()
         self.patcher = patch('docker.from_env', return_value=self.mock_docker_client)
@@ -26,6 +28,8 @@ class TestV1_6Features(unittest.TestCase):
 
     def tearDown(self):
         self.patcher.stop()
+        os.environ.clear()
+        os.environ.update(self.old_env)
 
 
     def test_start_without_notifications(self):
@@ -186,7 +190,7 @@ class TestV1_6Features(unittest.TestCase):
     def test_journal_io_error_handling(self):
         """Journal muss gracefully failen, wenn Disk voll ist"""
         import tempfile
-        from journal import Journal
+
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             path = f.name
             

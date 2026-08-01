@@ -1,8 +1,11 @@
 import unittest
 from unittest.mock import MagicMock, patch
+
 import docker
-from main import WatcherService
+
 from docker_handler import DockerHandler
+from main import WatcherService
+
 
 class TestRollbackBug(unittest.TestCase):
     def setUp(self):

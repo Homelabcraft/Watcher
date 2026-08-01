@@ -1,13 +1,13 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
-import json
-import os
 
-from main import WatcherService
-from config import Config
-from state_store import StateStore
-from journal import Journal
 import docker.errors
+
+from config import Config
+from journal import Journal
+from main import WatcherService
+
 
 class TestV17Recovery(unittest.TestCase):
     def setUp(self):
@@ -259,8 +259,8 @@ class TestV17Recovery(unittest.TestCase):
 
     def test_journal_json_decode_error(self):
         """JSONDecodeError im Journal erzeugt Sicherungsdatei"""
-        import tempfile
         import os
+        import tempfile
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "journal.json")
             with open(path, 'w') as f:

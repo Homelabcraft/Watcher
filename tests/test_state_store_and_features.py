@@ -1,10 +1,6 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
-import json
-import os
-import time
-import html
-from datetime import datetime
 
 import docker
 from docker.models.containers import Container
@@ -12,12 +8,13 @@ from docker.models.containers import Container
 from config import Config
 from docker_handler import DockerHandler, RecreationError
 from health_monitor import HealthMonitor
+from journal import Journal
 from main import WatcherService
 from models import ContainerUpdateInfo, UpdateStatus
-from state_store import StateStore
-from journal import Journal
-from telegram_notifier import TelegramNotifier
 from multi_notifier import MultiNotifier
+from state_store import StateStore
+from telegram_notifier import TelegramNotifier
+
 
 class TestV1_7Features(unittest.TestCase):
     def setUp(self):
@@ -257,7 +254,6 @@ class TestV1_7Features(unittest.TestCase):
 
     def test_state_store_transactions(self):
         """StateStore: Transaction lifecycle and JSON robustness."""
-        import json
         with open(self.config.state_path, 'w') as f:
             f.write("{invalid_json:")
         
@@ -279,12 +275,11 @@ class TestV1_7Features(unittest.TestCase):
 
     def test_state_store_write_error_prevents_update(self):
         """StateStore Schreibfehler verhindert Update"""
-        import config
         from unittest.mock import MagicMock
-        from docker_handler import DockerHandler
-        from main import WatcherService
+
+        import config
+        from exceptions import StateStoreError
         from state_store import StateStore
-        from exceptions import RecreationError, StateStoreError
 
         cfg = config.Config()
         cfg.dry_run = False
@@ -304,8 +299,8 @@ class TestV1_7Features(unittest.TestCase):
     def test_state_store_start_tx_rollback(self):
         """fehlgeschlagenes start_transaction verändert In-Memory-State nicht"""
         if os.path.exists("tmp_start.json"): os.remove("tmp_start.json")
-        from state_store import StateStore
         from exceptions import StateStoreError
+        from state_store import StateStore
         store = StateStore("tmp_start.json")
         store._save = MagicMock(side_effect=StateStoreError("fail"))
         with self.assertRaises(StateStoreError):
@@ -319,8 +314,8 @@ class TestV1_7Features(unittest.TestCase):
             path = f.name
             
         try:
-            from state_store import StateStore
             from exceptions import StateStoreError
+            from state_store import StateStore
             store = StateStore(path)
             store.start_transaction("app", "orig", "img")
             
@@ -346,8 +341,8 @@ class TestV1_7Features(unittest.TestCase):
             path = f.name
             
         try:
-            from state_store import StateStore
             from exceptions import StateStoreError
+            from state_store import StateStore
             store = StateStore(path)
             store.start_transaction("app", "1", "2")
             store._save = MagicMock(side_effect=StateStoreError("fail"))
@@ -365,8 +360,8 @@ class TestV1_7Features(unittest.TestCase):
             path = f.name
             
         try:
-            from state_store import StateStore
             from exceptions import StateStoreError
+            from state_store import StateStore
             store = StateStore(path)
             store._save = MagicMock(side_effect=StateStoreError("fail"))
             with self.assertRaises(StateStoreError):
@@ -563,10 +558,10 @@ class TestV1_7Features(unittest.TestCase):
 
     def test_missing_original_container_prevents_recreate(self):
         """fehlender Originalcontainer verhindert recreate"""
+        from unittest.mock import MagicMock
+
         from docker_handler import DockerHandler
         from exceptions import RecreationError
-        import docker
-        from unittest.mock import MagicMock
         
         client = MagicMock()
         client.containers.get.side_effect = docker.errors.NotFound("Not found")
@@ -589,10 +584,10 @@ class TestV1_7Features(unittest.TestCase):
                 
     def test_telegram_execution_plan_escapes(self):
         """Telegram Execution Plan escaped Sonderzeichen"""
-        from telegram_notifier import TelegramNotifier
-        from models import ExecutionPlan, ContainerUpdateInfo
         from unittest.mock import patch
-        import requests
+
+        from models import ContainerUpdateInfo, ExecutionPlan
+        from telegram_notifier import TelegramNotifier
         
         notifier = TelegramNotifier("token", "chat")
         plan = ExecutionPlan()
