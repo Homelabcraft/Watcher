@@ -76,10 +76,14 @@ class TestV1_7Features(unittest.TestCase):
             
         store = StateStore(path)
         self.assertEqual(store.get_cooldowns(), {})
-        self.assertTrue(os.path.exists(f"{path}.corrupted"))
+        # check if any corrupted file exists
+        corrupted_files = [f for f in os.listdir(".") if f.startswith(f"{path}.corrupted")]
+        self.assertTrue(len(corrupted_files) > 0)
+        for f in corrupted_files:
+            os.remove(f)
         
-        os.remove(path)
-        os.remove(f"{path}.corrupted")
+        if os.path.exists(path):
+            os.remove(path)
 
     def test_journal_atomic_save(self):
         """Atomare Journal Speicherung: Must write via .tmp file and replace."""
@@ -257,13 +261,13 @@ class TestV1_7Features(unittest.TestCase):
         self.assertEqual(store.get_cooldowns(), {})
         self.assertEqual(store.get_transactions(), {})
         
-        store.start_transaction("my_app", "id_123")
+        store.start_transaction("my_app", "id_123", "img_123")
         txs = store.get_transactions()
         self.assertIn("my_app", txs)
-        self.assertEqual(txs["my_app"]["status"], "prepared")
+        self.assertEqual(txs["my_app"]["phase"], "prepared")
         
-        store.update_transaction("my_app", "update_in_progress", "backup_456")
-        self.assertEqual(store.get_transactions()["my_app"]["status"], "update_in_progress")
+        store.update_transaction("my_app", "update_in_progress", backup_container_id="backup_456")
+        self.assertEqual(store.get_transactions()["my_app"]["phase"], "update_in_progress")
         
         store.end_transaction("my_app")
         self.assertEqual(store.get_transactions(), {})
