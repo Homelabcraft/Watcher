@@ -9,8 +9,10 @@ services:
       - .env
     # Note: Environment variables in .env take precedence over these defaults
     environment:
-      - TZ=${TZ:-UTC}
-      - CHECK_INTERVAL=${CHECK_INTERVAL:-86400}
+      - TZ=Europe/Zurich
+      - CHECK_INTERVAL=86400
+      - NOTIFY_UPDATES_AVAILABLE=true
+      - ALLOW_USER_FALLBACK=false
       - SCHEDULE_TIME=${SCHEDULE_TIME:-}
       - DRY_RUN=${DRY_RUN:-false}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

@@ -382,8 +382,7 @@ class WatcherService:
         if now >= target_dt:
             target_dt += timedelta(days=1)
             
-        jitter = random.uniform(0, 60)
-        return (target_dt - now).total_seconds() + jitter
+        return (target_dt - now).total_seconds()
 
     def startup_recovery(self):
         """Finds and resolves orphaned _backup containers from aborted updates."""
