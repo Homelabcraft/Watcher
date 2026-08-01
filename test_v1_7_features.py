@@ -28,23 +28,28 @@ class TestV1_7Features(unittest.TestCase):
         """Telegram HTML Formatting: Ensure < > & are escaped but <pre> remains."""
         self.config.telegram_bot_token = "mock"
         notifier = TelegramNotifier("mock", "mock")
-        notifier._send = MagicMock()
         
         info = ContainerUpdateInfo(name="test", old_id="a", status=UpdateStatus.FAILED, image_ref="test:latest")
         info.error_step = "pull"
         # Tricky error message with raw HTML characters
         info.error_message = 'Failed to pull <my_image> & "other"'
+        info.rollback_attempted = True
+        info.rollback_success = False
+        info.rollback_details = '<rollback & fail>'
         
-        notifier.notify_update_failure(info)
-        
-        notifier._send.assert_called_once()
-        body = notifier._send.call_args[0][1]
-        
-        # Escaped parts should be in there
-        self.assertIn('&lt;my_image&gt; &amp; &quot;other&quot;', body)
-        # Pre tags should still exist as raw tags
-        self.assertIn('<pre>', body)
-        self.assertIn('</pre>', body)
+        with patch('requests.post') as mock_post:
+            notifier.notify_update_failure(info)
+            
+            mock_post.assert_called_once()
+            payload = mock_post.call_args[1].get('json', {})
+            body = payload.get('text', '')
+            
+            # Escaped parts should be in there
+            self.assertIn('&lt;my_image&gt; &amp; &quot;other&quot;', body)
+            self.assertIn('&lt;rollback &amp; fail&gt;', body)
+            # Pre tags should still exist as raw tags
+            self.assertIn('<pre>', body)
+            self.assertIn('</pre>', body)
 
     def test_multinotifier_isolation(self):
         """Ausfall eines einzelnen Notifiers darf die anderen nicht stoppen."""
