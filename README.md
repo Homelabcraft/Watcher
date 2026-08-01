@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Version](https://img.shields.io/badge/version-v1.7.0-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
 
-**Watcher** is a Homelab Docker container auto-updater built for environments where downtime is unacceptable. It automates your image lifecycle while prioritizing **system stability and data persistence** through container rollbacks, multi-stage health validation, and rich multi-messenger notifications.
+**Watcher** is a Homelab Docker container auto-updater built for environments where short downtimes are acceptable. It automates your image lifecycle while prioritizing **system stability and data persistence** through container rollbacks, multi-stage health validation, and rich multi-messenger notifications.
 
 ---
 
@@ -13,7 +13,7 @@
 
 While tools like Watchtower are great for blindly pulling and restarting containers, they often leave you in the dark when an update breaks your application. **Watcher is different.**
 
-*   **Container Lifecycle:** Watcher pauses your working container, renames it, and keeps it as a backup before creating a replacement.
+*   **Container Lifecycle:** Watcher stops your working container, renames it, and keeps it as a backup before creating a replacement.
 *   **Health Validation:** It verifies the health of the newly pulled container. If it crashes or reports unhealthy, Watcher instantly restores the backup.
 *   **Rich Notifications:** Instead of generic "Update applied" logs, Watcher sends comprehensive, color-coded execution plans, version shifts (image hashes), and detailed rollback reports to **Discord, Slack, Telegram, or Ntfy**.
 *   **Local Journaling:** Watcher maintains a persistent local JSON history of every scan cycle and update result for auditing and troubleshooting.
@@ -82,7 +82,7 @@ services:
 Watcher addresses the "Broken Update" problem by ensuring that a functional environment is never deleted until the replacement is verified as stable.
 
 1.  **Detection:** Identifies upstream image changes via SHA-256 digest comparison.
-2.  **State Preservation:** The active container is paused and renamed to `${NAME}_backup`, preserving its exact state.
+2.  **State Preservation:** The active container is stopped and renamed to `${NAME}_backup`, preserving its exact state.
 3.  **Hardened Recreation:** A new container is provisioned with close configuration parity.
 4.  **Health Verification:** A multi-stage poll validates the new container's status and internal Docker health checks.
 5.  **Atomic Cleanup:** Only upon confirmed health is the backup removed. On failure, an **automated rollback** restores the original container instantly.
