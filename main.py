@@ -60,6 +60,7 @@ class WatcherService:
         
         # 1.6.0 Failure tracking
         self.failure_tracker = self.state_store.get_cooldowns()
+        self.abort_updates_for_cycle = False
         
         self._setup_signals()
 
@@ -148,7 +149,19 @@ class WatcherService:
             dependents = self.get_dependents([name], [old_id])
 
             # 3. Execution
-            self.state_store.start_transaction(name, old_id, old_image_id)
+            from exceptions import StateStoreError
+            try:
+                self.state_store.start_transaction(name, old_id, old_image_id)
+            except StateStoreError as e:
+                self.abort_updates_for_cycle = True
+                logger.error(f"StateStoreError during start_transaction for {name}: {e}")
+                info.status = UpdateStatus.FAILED
+                info.error_message = f"State save failed: {e}"
+                info.error_step = "start_transaction"
+                info.duration_sec = time.perf_counter() - start_time
+                self.notifier.notify_update_failure(info)
+                return info
+
             info.error_step = "recreate"
             logger.info(f"Updating {name}...")
             if self.config.notify_on_update_start:
@@ -164,8 +177,12 @@ class WatcherService:
             info.error_step = "health_check"
             if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                 logger.info(f"Success: {name}")
-                self.state_store.update_transaction(name, "replacement_verified")
-                
+                try:
+                    self.state_store.update_transaction(name, "replacement_verified")
+                except StateStoreError as e:
+                    self.abort_updates_for_cycle = True
+                    logger.error(f"StateStoreError during update_transaction for {name}: {e}")
+                    
                 if not self.docker.remove_backup(name):
                     self.notifier.notify_summary("⚠️ Backup Removal Failed", f"Could not remove {name}_backup. Transaction retained.")
                     info.status = UpdateStatus.FAILED
@@ -175,7 +192,19 @@ class WatcherService:
                     self.notifier.notify_update_failure(info)
                     return info
                 
-                self.state_store.end_transaction(name)
+                try:
+                    self.state_store.end_transaction(name)
+                except StateStoreError as e:
+                    self.abort_updates_for_cycle = True
+                    logger.error(f"StateStoreError during end_transaction for {name}: {e}")
+                    self.notifier.notify_summary("⚠️ State Error after Success", f"Update successful but state save failed: {e}. Stopping further updates in this cycle.")
+                    info.status = UpdateStatus.FAILED
+                    info.error_message = "State save failed after cleanup"
+                    info.error_step = "state_save"
+                    info.duration_sec = time.perf_counter() - start_time
+                    self.notifier.notify_update_failure(info)
+                    return info
+
                 # 5. Cleanup (Only after success)
                 if self.config.cleanup_old_images:
                     self.docker.remove_image(old_image_id)
@@ -223,6 +252,9 @@ class WatcherService:
             self._record_failure(name)
             return info
         except Exception as e:
+            from exceptions import StateStoreError
+            if isinstance(e, StateStoreError):
+                self.abort_updates_for_cycle = True
             logger.error(f"Error processing {name}: {e}")
             info.error_message = str(e)
             
@@ -247,14 +279,26 @@ class WatcherService:
         self.state_store.set_cooldowns(self.failure_tracker)
         logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
 
+    def _best_effort_update_tx(self, name: str, phase: str):
+        from exceptions import StateStoreError
+        try:
+            self.state_store.update_transaction(name, phase)
+        except StateStoreError as e:
+            self.abort_updates_for_cycle = True
+            logger.error(f"StateStoreError during rollback update ({phase}) for {name}: {e}. Continuing physical rollback.")
+
+    def _best_effort_end_tx(self, name: str):
+        from exceptions import StateStoreError
+        try:
+            self.state_store.end_transaction(name)
+        except StateStoreError as e:
+            self.abort_updates_for_cycle = True
+            logger.error(f"StateStoreError during rollback end_transaction for {name}: {e}. Continuing physical rollback.")
+
     def perform_rollback(self, name: str, old_id: str) -> tuple[bool, str]:
         """Rollback using the saved backup container."""
-        from exceptions import StateStoreError
         logger.warning(f"ROLLBACK for {name}")
-        try:
-            self.state_store.update_transaction(name, "rollback_started")
-        except StateStoreError as e:
-            logger.error(f"StateStoreError during rollback_started for {name}: {e}. Proceeding with physical rollback anyway to ensure reliability.")
+        self._best_effort_update_tx(name, "rollback_started")
         self.notifier.notify_rollback(name, "started")
         try:
             tx = self.state_store.get_transactions().get(name, {})
@@ -275,18 +319,18 @@ class WatcherService:
                     if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                         msg = "Original container recovered successfully."
                         self.notifier.notify_rollback(name, "success", msg)
-                        self.state_store.end_transaction(name)
+                        self._best_effort_end_tx(name)
                         return True, msg
                     else:
                         msg = "Original container failed health check after rollback."
                         self.notifier.notify_rollback(name, "failed", msg)
-                        self.state_store.update_transaction(name, 'rollback_failed')
+                        self._best_effort_update_tx(name, 'rollback_failed')
                         return False, msg
                 else:
                     logger.error(f"Container {name} exists but does not match any valid IDs. Retaining.")
                     msg = "Rollback failed: Identity mismatch for main container."
                     self.notifier.notify_rollback(name, "failed", msg)
-                    self.state_store.update_transaction(name, 'rollback_failed')
+                    self._best_effort_update_tx(name, 'rollback_failed')
                     return False, msg
                     
             except docker.errors.NotFound:
@@ -295,7 +339,7 @@ class WatcherService:
                 logger.error(f"Error handling current container during rollback: {e}")
                 msg = f"Rollback failed: {e}"
                 self.notifier.notify_rollback(name, "failed", msg)
-                self.state_store.update_transaction(name, 'rollback_failed')
+                self._best_effort_update_tx(name, 'rollback_failed')
                 return False, msg
 
             # 2. Restore backup
@@ -308,7 +352,7 @@ class WatcherService:
                     logger.error(f"Backup container {backup_name} identity mismatch! Refusing to restore.")
                     msg = "Rollback failed: Backup identity mismatch."
                     self.notifier.notify_rollback(name, "failed", msg)
-                    self.state_store.update_transaction(name, 'rollback_failed')
+                    self._best_effort_update_tx(name, 'rollback_failed')
                     return False, msg
                 
                 logger.info(f"Found backup {backup_name}. Restoring...")
@@ -322,32 +366,31 @@ class WatcherService:
                     logger.error(f"Failed to rename or start backup container {backup_name}: {e}")
                     msg = f"Critical failure: Could not rename or start backup: {str(e)}"
                     self.notifier.notify_rollback(name, "failed", msg)
-                    self.state_store.update_transaction(name, 'rollback_failed')
+                    self._best_effort_update_tx(name, 'rollback_failed')
                     return False, msg
-
             except docker.errors.NotFound:
                 logger.error(f"Backup {backup_name} not found. Rollback impossible.")
                 msg = "Rollback failed: Backup container not found."
                 self.notifier.notify_rollback(name, "failed", msg)
-                self.state_store.update_transaction(name, 'rollback_failed')
+                self._best_effort_update_tx(name, 'rollback_failed')
                 return False, msg
 
             # 3. Final verification
             if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                 msg = "Restored from backup and healthy."
                 self.notifier.notify_rollback(name, "success", msg)
-                self.state_store.end_transaction(name)
+                self._best_effort_end_tx(name)
                 return True, msg
             else:
                 msg = "Container stopped or unhealthy after rollback attempt."
                 self.notifier.notify_rollback(name, "failed", msg)
-                self.state_store.update_transaction(name, 'rollback_failed')
+                self._best_effort_update_tx(name, 'rollback_failed')
                 return False, msg
         except Exception as e:
             logger.error(f"CRITICAL ROLLBACK FAILURE for {name}: {e}")
             msg = f"Unexpected error during rollback: {str(e)}"
             self.notifier.notify_rollback(name, "failed", msg)
-            self.state_store.update_transaction(name, 'rollback_failed')
+            self._best_effort_update_tx(name, 'rollback_failed')
             return False, msg
 
     def get_dependents(self, updated_names: list[str], updated_ids: list[str]) -> list[str]:
@@ -492,6 +535,24 @@ class WatcherService:
                                 logger.error(f"Main container {name} does not match original IDs. Retaining transaction.")
                         except docker.errors.NotFound:
                             logger.error(f"Main container {name} also missing. Retaining transaction.")
+                    elif phase in ["replacement_verified", "replacement_started"]:
+                        try:
+                            orig_c = self.client.containers.get(name)
+                            if orig_c.id == tx.get("new_container_id") and orig_c.image.id == tx.get("new_image_id"):
+                                logger.info(f"Main container {name} is running as expected, but backup is missing. Assuming successful update.")
+                                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                                    try:
+                                        self.state_store.end_transaction(name)
+                                        logger.info(f"Transaction for {name} successfully ended after recovery.")
+                                    except Exception as e:
+                                        logger.error(f"StateStoreError while ending transaction for {name}: {e}. Retaining transaction.")
+                                        self.notifier.notify_summary("⚠️ Recovery Warning", f"Could not end transaction for {name} despite successful state.")
+                                else:
+                                    logger.error(f"Main container {name} is unhealthy, but no backup exists. Cannot rollback.")
+                            else:
+                                logger.error(f"Main container {name} IDs do not match expected new_container_id. Retaining transaction.")
+                        except docker.errors.NotFound:
+                            logger.error(f"Both main container {name} and backup missing in phase {phase}. Retaining transaction.")
                     else:
                         logger.error(f"Backup missing for {name} in phase {phase}. Cannot rollback. Retaining transaction.")
                     continue
@@ -548,6 +609,7 @@ class WatcherService:
             logger.error(f"Error during startup recovery: {e}")
 
     def run_cycle(self):
+        self.abort_updates_for_cycle = False
         cycle_start = time.perf_counter()
         logger.info("--- Cycle Start ---")
         try:
@@ -584,7 +646,11 @@ class WatcherService:
                 
                 # Check for max updates limit
                 attempt_update = is_auto
-                if is_auto and self.config.max_updates_per_cycle > 0 and update_count >= self.config.max_updates_per_cycle:
+                if self.abort_updates_for_cycle:
+                    if attempt_update:
+                        logger.warning(f"Skipping update for {c.name} due to active StateStoreError in this cycle.")
+                    attempt_update = False
+                elif is_auto and self.config.max_updates_per_cycle > 0 and update_count >= self.config.max_updates_per_cycle:
                     attempt_update = False
 
                 info = self.process_container(c, auto_update=attempt_update)

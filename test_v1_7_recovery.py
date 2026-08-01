@@ -442,6 +442,26 @@ class TestV17Recovery(unittest.TestCase):
         # Transaction retained
         self.assertIn("app", self.service.state_store.get_transactions())
 
+    def test_recovery_without_backup_after_successful_update(self):
+        """Startup Recovery ohne Backup nach erfolgreichem Update"""
+        self.service.state_store.start_transaction("app", "orig_123", "img_1")
+        self.service.state_store.update_transaction("app", "replacement_verified", new_container_id="new_456", new_image_id="img_2")
+        
+        mock_orig = MagicMock()
+        mock_orig.id = "new_456"
+        mock_orig.image.id = "img_2"
+        mock_orig.name = "app"
+        
+        def get_container(name):
+            if name == "app": return mock_orig
+            raise docker.errors.NotFound("Not found")
+            
+        self.mock_client.containers.get.side_effect = get_container
+        
+        with patch.object(self.service.health, 'wait_for_health', return_value=True):
+            self.service.startup_recovery()
+            
+        self.assertNotIn("app", self.service.state_store.get_transactions())
 
 if __name__ == '__main__':
     unittest.main()

@@ -343,6 +343,101 @@ class TestV1_7Features(unittest.TestCase):
             store.set_cooldowns({"app": {"count": 1}})
         self.assertEqual(store.get_cooldowns(), {})
 
+    def test_defensive_cooldown_getter(self):
+        """get_cooldowns() gibt defensive Kopie zurück"""
+        if os.path.exists("tmp_def_cool.json"): os.remove("tmp_def_cool.json")
+        from state_store import StateStore
+        store = StateStore("tmp_def_cool.json")
+        store.set_cooldowns({"app": {"count": 1, "cooldown_until": "time"}})
+        
+        cooldowns = store.get_cooldowns()
+        cooldowns["app"]["count"] = 999
+        cooldowns["new_app"] = {"count": 1}
+        
+        internal = store.get_cooldowns()
+        self.assertEqual(internal["app"]["count"], 1)
+        self.assertNotIn("new_app", internal)
+
+    def test_defensive_transaction_getter(self):
+        """get_transactions() gibt defensive Kopie zurück"""
+        if os.path.exists("tmp_def_tx.json"): os.remove("tmp_def_tx.json")
+        from state_store import StateStore
+        store = StateStore("tmp_def_tx.json")
+        store.start_transaction("app", "orig", "img")
+        
+        txs = store.get_transactions()
+        txs["app"]["phase"] = "hacked"
+        txs["new_app"] = {}
+        
+        internal = store.get_transactions()
+        self.assertEqual(internal["app"]["phase"], "prepared")
+        self.assertNotIn("new_app", internal)
+
+    def test_end_transaction_error_after_cleanup(self):
+        """Fehler bei end_transaction nach erfolgreichem Cleanup löst keinen Rollback aus."""
+        with patch('docker.from_env', return_value=self.mock_client):
+            service = WatcherService(self.config)
+        
+        c = MagicMock(spec=Container)
+        c.name = "app"
+        c.id = "orig_123"
+        c.image.id = "img_1"
+        c.status = "running"
+        c.attrs = {"Config": {"Image": "img_1"}}
+        
+        service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "img_1", "img_2"))
+        service.docker.get_recreation_plan = MagicMock(return_value={})
+        service.docker.recreate = MagicMock(return_value=MagicMock(id="new_456"))
+        service.health.wait_for_health = MagicMock(return_value=True)
+        service.docker.remove_backup = MagicMock(return_value=True)
+        
+        from exceptions import StateStoreError
+        service.state_store.end_transaction = MagicMock(side_effect=StateStoreError("fail"))
+        service.perform_rollback = MagicMock()
+        
+        info = service.process_container(c, True)
+        
+        self.assertEqual(info.status, UpdateStatus.FAILED)
+        self.assertEqual(info.error_step, "state_save")
+        self.assertTrue(service.abort_updates_for_cycle)
+        service.perform_rollback.assert_not_called()
+
+    def test_state_store_error_stops_cycle_updates(self):
+        """Ein StateStoreError stoppt weitere Auto-Updates im selben Zyklus."""
+        with patch('docker.from_env', return_value=self.mock_client):
+            service = WatcherService(self.config)
+        
+        c1 = MagicMock(spec=Container)
+        c1.name = "app1"
+        c1.id = "orig_1"
+        c1.image = MagicMock()
+        c1.attrs = {"Config": {"Image": "img_1"}}
+        
+        c2 = MagicMock(spec=Container)
+        c2.name = "app2"
+        c2.id = "orig_2"
+        c2.image = MagicMock()
+        c2.attrs = {"Config": {"Image": "img_2"}}
+        
+        service.docker.get_watched_containers = MagicMock(return_value=([c1, c2], []))
+        
+        original_pc = service.process_container
+        def mock_process(c, auto_update):
+            if c.name == "app1":
+                # Simulate a StateStoreError during process_container
+                service.abort_updates_for_cycle = True
+                return ContainerUpdateInfo(c.name, c.id, UpdateStatus.FAILED)
+            return original_pc(c, auto_update)
+            
+        with patch.object(service, 'process_container', side_effect=mock_process) as mock_pc:
+            service.run_cycle()
+            
+            # c1 should be called with auto_update=True
+            # c2 should be called with auto_update=False because c1 set the flag
+            self.assertEqual(mock_pc.call_count, 2)
+            mock_pc.assert_any_call(c1, auto_update=True)
+            mock_pc.assert_any_call(c2, auto_update=False)
+
     def test_missing_original_container_prevents_recreate(self):
         """fehlender Originalcontainer verhindert recreate"""
         from docker_handler import DockerHandler

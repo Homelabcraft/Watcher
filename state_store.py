@@ -76,7 +76,8 @@ class StateStore:
             raise StateStoreError(f"Atomic save failed for state store: {e}")
 
     def get_cooldowns(self) -> dict:
-        return self._data["cooldowns"]
+        import copy
+        return copy.deepcopy(self._data["cooldowns"])
 
     def set_cooldowns(self, cooldowns: dict):
         import copy
@@ -140,4 +141,5 @@ class StateStore:
 
     def get_transactions(self) -> Dict[str, Any]:
         """Returns all ongoing transactions."""
-        return self._data.get("transactions", {})
+        import copy
+        return copy.deepcopy(self._data.get("transactions", {}))
