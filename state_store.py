@@ -83,12 +83,11 @@ class StateStore:
         import copy
         old_data = copy.deepcopy(self._data)
         try:
-            self._data["cooldowns"] = cooldowns
+            self._data["cooldowns"] = copy.deepcopy(cooldowns)
             self._save()
         except StateStoreError:
             self._data = old_data
             raise
-        
     def start_transaction(self, container_name: str, original_container_id: str, original_image_id: str):
         """Starts an update transaction for a container."""
         import copy

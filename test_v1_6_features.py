@@ -26,8 +26,7 @@ class TestV1_6Features(unittest.TestCase):
 
     def tearDown(self):
         self.patcher.stop()
-        if os.path.exists("test_journal.json"):
-            os.remove("test_journal.json")
+
 
     def test_start_without_notifications(self):
         """Watcher should start cleanly if no notifier is configured."""
@@ -95,22 +94,32 @@ class TestV1_6Features(unittest.TestCase):
             self.assertNotIn(name, service.failure_tracker)
 
     def test_journal_writing(self):
-        """Check if journal file is created and contains expected data."""
-        os.environ["JOURNAL_PATH"] = "test_journal.json"
-        service = WatcherService()
-        
-        summary = {"updated": ["app1"], "failed": [], "rolled_back": [], "reported": [], "skipped": []}
-        info = ContainerUpdateInfo("app1", "id1", UpdateStatus.UPDATED)
-        info.duration_sec = 5.5
-        
-        service.journal.record_cycle(1, "LIVE", summary, [info], 10.0)
-        
-        self.assertTrue(os.path.exists("test_journal.json"))
-        with open("test_journal.json", "r") as f:
-            data = json.load(f)
-            self.assertEqual(len(data), 1)
-            self.assertEqual(data[0]["summary"]["updated"], ["app1"])
-            self.assertEqual(data[0]["events"][0]["name"], "app1")
+        """Journal must write cycle outcomes cleanly"""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+            
+        try:
+            os.environ["JOURNAL_PATH"] = path
+            service = WatcherService()
+            
+            summary = {"updated": ["app1"], "failed": [], "rolled_back": [], "reported": [], "skipped": []}
+            info = ContainerUpdateInfo("app1", "id1", UpdateStatus.UPDATED)
+            info.duration_sec = 5.5
+            
+            service.journal.record_cycle(1, "LIVE", summary, [info], 10.0)
+            
+            self.assertTrue(os.path.exists(path))
+            with open(path, "r") as f:
+                data = json.load(f)
+                self.assertEqual(len(data), 1)
+                self.assertEqual(data[0]["summary"]["updated"], ["app1"])
+                self.assertEqual(data[0]["events"][0]["name"], "app1")
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+            if "JOURNAL_PATH" in os.environ:
+                del os.environ["JOURNAL_PATH"]
 
     def test_summary_strategies(self):
         """Test always, on_change, and on_error strategies."""
@@ -175,12 +184,24 @@ class TestV1_6Features(unittest.TestCase):
         service.process_container.assert_not_called()
 
     def test_journal_io_error_handling(self):
-        """Watcher should remain stable if the journal file is not writable."""
-        with patch("builtins.open", side_effect=IOError("Permission denied")):
+        """Journal muss gracefully failen, wenn Disk voll ist"""
+        import tempfile
+        from journal import Journal
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+            
+        try:
+            os.environ["JOURNAL_PATH"] = path
             service = WatcherService()
-            # Try to record a cycle - should log error but not crash
-            service.journal.record_cycle(1, "LIVE", {}, [], 1.0)
+            with patch("builtins.open", side_effect=OSError("Disk full")):
+                # Should not crash the process
+                service.journal.record_cycle(1, "LIVE", {}, [], 1.0)
             self.assertEqual(len(service.journal._history), 1)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+            if "JOURNAL_PATH" in os.environ:
+                del os.environ["JOURNAL_PATH"]
 
     def test_max_updates_limit(self):
         """Cycle should respect MAX_UPDATES_PER_CYCLE."""

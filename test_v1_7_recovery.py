@@ -259,20 +259,23 @@ class TestV17Recovery(unittest.TestCase):
 
     def test_journal_json_decode_error(self):
         """JSONDecodeError im Journal erzeugt Sicherungsdatei"""
-        with open(self.config.journal_path, 'w') as f:
-            f.write("{invalid_json:")
+        import tempfile
+        import os
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "journal.json")
+            with open(path, 'w') as f:
+                f.write("{invalid_json:")
+                
+            # Initialize should trigger _load and backup
+            j = Journal(True, path)
             
-        # Initialize should trigger _load and backup
-        j = Journal(True, self.config.journal_path)
-        
-        # Check if corrupted file was created
-        found = False
-        for f in os.listdir("."):
-            if f.startswith("test_recovery_journal.json.corrupted_"):
-                found = True
-                os.remove(f)
-                break
-        self.assertTrue(found)
+            # Check if corrupted file was created
+            found = False
+            for f in os.listdir(d):
+                if f.startswith("journal.json.corrupted_"):
+                    found = True
+                    break
+            self.assertTrue(found)
 
     def test_schedule_time_no_jitter(self):
         """SCHEDULE_TIME enthält keinen Jitter"""

@@ -117,8 +117,10 @@ class WatcherService:
                 info.error_step = None
                 # Success/No-change clears the failure tracker
                 if name in self.failure_tracker:
-                    del self.failure_tracker[name]
-                    self.state_store.set_cooldowns(self.failure_tracker)
+                    import copy
+                    new_tracker = copy.deepcopy(self.failure_tracker)
+                    del new_tracker[name]
+                    self._update_cooldowns_persistently(new_tracker, name)
                 return info
             if status == UpdateStatus.FAILED:
                 logger.error(f"Update check failed for {name}")
@@ -223,8 +225,10 @@ class WatcherService:
                 
                 # Success clears the failure tracker
                 if name in self.failure_tracker:
-                    del self.failure_tracker[name]
-                    self.state_store.set_cooldowns(self.failure_tracker)
+                    import copy
+                    new_tracker = copy.deepcopy(self.failure_tracker)
+                    del new_tracker[name]
+                    self._update_cooldowns_persistently(new_tracker, name)
                     
                 return info
             else:
@@ -279,18 +283,24 @@ class WatcherService:
 
     def _record_failure(self, name: str):
         """Internal helper to increment failure count and set cooldown."""
-        tracker = self.failure_tracker.get(name, {"count": 0, "cooldown_until": datetime.min})
+        import copy
+        new_tracker = copy.deepcopy(self.failure_tracker)
+        tracker = new_tracker.get(name, {"count": 0, "cooldown_until": datetime.min})
         tracker["count"] += 1
         tracker["cooldown_until"] = datetime.now() + timedelta(seconds=self.config.failure_cooldown_seconds)
-        self.failure_tracker[name] = tracker
+        new_tracker[name] = tracker
+        self._update_cooldowns_persistently(new_tracker, name)
+        logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
+
+    def _update_cooldowns_persistently(self, new_tracker: dict, name: str):
         try:
-            self.state_store.set_cooldowns(self.failure_tracker)
+            self.state_store.set_cooldowns(new_tracker)
+            self.failure_tracker = new_tracker
         except Exception as e:
             from exceptions import StateStoreError
             if isinstance(e, StateStoreError):
                 self.abort_updates_for_cycle = True
             logger.error(f"Error setting cooldowns for {name}: {e}")
-        logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
 
     def _best_effort_update_tx(self, name: str, phase: str):
         from exceptions import StateStoreError

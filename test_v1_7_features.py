@@ -86,20 +86,24 @@ class TestV1_7Features(unittest.TestCase):
             os.remove(path)
 
     def test_journal_atomic_save(self):
-        """Atomare Journal Speicherung: Must write via .tmp file and replace."""
-        path = "test_journal_atomic.json"
-        journal = Journal(True, path)
-        journal.record_cycle(1, "OK", {}, [], 1.0)
-        
-        # Since it replaces immediately, we can't easily assert the tmp file existence mid-flight without mocking os.replace
-        with patch('os.replace') as mock_replace:
-            journal.record_cycle(1, "OK", {}, [], 1.0)
-            mock_replace.assert_called_once_with(f"{path}.tmp", path)
+        """Journal schreibt temp file und macht os.replace"""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
             
-        if os.path.exists(path):
-            os.remove(path)
-        if os.path.exists(f"{path}.tmp"):
-            os.remove(f"{path}.tmp")
+        try:
+            journal = Journal(True, path)
+            journal.record_cycle(1, "OK", {}, [], 1.0)
+            
+            # Since it replaces immediately, we can't easily assert the tmp file existence mid-flight without mocking os.replace
+            with patch('os.replace') as mock_replace:
+                journal.record_cycle(1, "OK", {}, [], 1.0)
+                mock_replace.assert_called_with(path + ".tmp", path)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+            if os.path.exists(path + ".tmp"):
+                os.remove(path + ".tmp")
 
     def test_docker_list_error(self):
         """Fehler bei Docker Container Listing: Must abort cycle, not report 0 containers."""
@@ -308,70 +312,136 @@ class TestV1_7Features(unittest.TestCase):
             store.start_transaction("app", "1", "2")
         self.assertNotIn("app", store.get_transactions())
 
-    def test_state_store_update_tx_rollback(self):
+    def test_update_transaction_keeps_previous_on_fail(self):
         """fehlgeschlagenes update_transaction behält vorherige Phase"""
-        if os.path.exists("tmp_update.json"): os.remove("tmp_update.json")
-        from state_store import StateStore
-        from exceptions import StateStoreError
-        store = StateStore("tmp_update.json")
-        store.start_transaction("app", "1", "2")
-        store._save = MagicMock(side_effect=StateStoreError("fail"))
-        with self.assertRaises(StateStoreError):
-            store.update_transaction("app", "backup_renamed")
-        self.assertEqual(store.get_transactions()["app"]["phase"], "prepared")
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+            
+        try:
+            from state_store import StateStore
+            from exceptions import StateStoreError
+            store = StateStore(path)
+            store.start_transaction("app", "orig", "img")
+            
+            # mock atomarer save schlägt fehl
+            original_save = store._save
+            def mock_save():
+                raise StateStoreError("Disk full")
+            
+            with patch.object(store, '_save', side_effect=mock_save):
+                with self.assertRaises(StateStoreError):
+                    store.update_transaction("app", "hacked")
+                    
+            internal = store.get_transactions()
+            self.assertEqual(internal["app"]["phase"], "prepared")
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
-    def test_state_store_end_tx_rollback(self):
+    def test_end_transaction_keeps_transaction_on_fail(self):
         """fehlgeschlagenes end_transaction behält Transaktion"""
-        if os.path.exists("tmp_end.json"): os.remove("tmp_end.json")
-        from state_store import StateStore
-        from exceptions import StateStoreError
-        store = StateStore("tmp_end.json")
-        store.start_transaction("app", "1", "2")
-        store._save = MagicMock(side_effect=StateStoreError("fail"))
-        with self.assertRaises(StateStoreError):
-            store.end_transaction("app")
-        self.assertIn("app", store.get_transactions())
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+            
+        try:
+            from state_store import StateStore
+            from exceptions import StateStoreError
+            store = StateStore(path)
+            store.start_transaction("app", "1", "2")
+            store._save = MagicMock(side_effect=StateStoreError("fail"))
+            with self.assertRaises(StateStoreError):
+                store.end_transaction("app")
+            self.assertIn("app", store.get_transactions())
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
-    def test_state_store_set_cooldowns_rollback(self):
+    def test_set_cooldowns_keeps_previous_on_fail(self):
         """fehlgeschlagenes set_cooldowns behält vorherige Cooldowns"""
-        if os.path.exists("tmp_cool.json"): os.remove("tmp_cool.json")
-        from state_store import StateStore
-        from exceptions import StateStoreError
-        store = StateStore("tmp_cool.json")
-        store._save = MagicMock(side_effect=StateStoreError("fail"))
-        with self.assertRaises(StateStoreError):
-            store.set_cooldowns({"app": {"count": 1}})
-        self.assertEqual(store.get_cooldowns(), {})
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+            
+        try:
+            from state_store import StateStore
+            from exceptions import StateStoreError
+            store = StateStore(path)
+            store._save = MagicMock(side_effect=StateStoreError("fail"))
+            with self.assertRaises(StateStoreError):
+                store.set_cooldowns({"app": {"count": 1}})
+            self.assertEqual(store.get_cooldowns(), {})
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_defensive_cooldown_getter(self):
         """get_cooldowns() gibt defensive Kopie zurück"""
-        if os.path.exists("tmp_def_cool.json"): os.remove("tmp_def_cool.json")
-        from state_store import StateStore
-        store = StateStore("tmp_def_cool.json")
-        store.set_cooldowns({"app": {"count": 1, "cooldown_until": "time"}})
-        
-        cooldowns = store.get_cooldowns()
-        cooldowns["app"]["count"] = 999
-        cooldowns["new_app"] = {"count": 1}
-        
-        internal = store.get_cooldowns()
-        self.assertEqual(internal["app"]["count"], 1)
-        self.assertNotIn("new_app", internal)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+            
+        try:
+            from state_store import StateStore
+            store = StateStore(path)
+            store.set_cooldowns({"app": {"count": 1, "cooldown_until": "time"}})
+            
+            cooldowns = store.get_cooldowns()
+            cooldowns["app"]["count"] = 999
+            cooldowns["new_app"] = {"count": 1}
+            
+            internal = store.get_cooldowns()
+            self.assertEqual(internal["app"]["count"], 1)
+            self.assertNotIn("new_app", internal)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_set_cooldowns_aliasing(self):
+        """set_cooldowns() behält interne Kopie, Ändern des übergebenen dicts ändert internen Status nicht"""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+            
+        try:
+            from state_store import StateStore
+            store = StateStore(path)
+            
+            my_cooldowns = {"app": {"count": 1}}
+            store.set_cooldowns(my_cooldowns)
+            
+            # Verändere das übergebene Dictionary
+            my_cooldowns["app"]["count"] = 999
+            
+            # Interner Store darf nicht verändert worden sein
+            internal = store.get_cooldowns()
+            self.assertEqual(internal["app"]["count"], 1)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_defensive_transaction_getter(self):
         """get_transactions() gibt defensive Kopie zurück"""
-        if os.path.exists("tmp_def_tx.json"): os.remove("tmp_def_tx.json")
-        from state_store import StateStore
-        store = StateStore("tmp_def_tx.json")
-        store.start_transaction("app", "orig", "img")
-        
-        txs = store.get_transactions()
-        txs["app"]["phase"] = "hacked"
-        txs["new_app"] = {}
-        
-        internal = store.get_transactions()
-        self.assertEqual(internal["app"]["phase"], "prepared")
-        self.assertNotIn("new_app", internal)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+            
+        try:
+            from state_store import StateStore
+            store = StateStore(path)
+            store.start_transaction("app", "orig", "img")
+            
+            txs = store.get_transactions()
+            txs["app"]["phase"] = "hacked"
+            txs["new_app"] = {}
+            
+            internal = store.get_transactions()
+            self.assertEqual(internal["app"]["phase"], "prepared")
+            self.assertNotIn("new_app", internal)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_end_transaction_error_after_cleanup(self):
         """Fehler bei end_transaction nach erfolgreichem Cleanup löst keinen Rollback aus."""
