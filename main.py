@@ -344,6 +344,8 @@ class WatcherService:
         if not dependent_names:
             return
             
+        restarted = []
+        failures = []
         try:
             for c in self.client.containers.list():
                 if c.name in dependent_names:
@@ -351,10 +353,15 @@ class WatcherService:
                     try:
                         c.restart(timeout=15)
                         logger.info(f"Successfully restarted dependent {c.name}.")
+                        restarted.append(c.name)
                     except Exception as e:
                         logger.error(f"Failed to restart dependent {c.name}: {e}")
+                        failures.append((c.name, str(e)))
         except Exception as e:
             logger.error(f"Error checking dependents: {e}")
+            
+        if restarted or failures:
+            self.notifier.notify_dependents_restarted(restarted, failures)
 
     def _get_sleep_duration(self) -> float:
         if not self.config.schedule_time:

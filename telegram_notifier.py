@@ -53,7 +53,8 @@ class TelegramNotifier:
         self._send(f"✅ Update OK: {info.name}", msg)
 
     def notify_update_failure(self, info: ContainerUpdateInfo) -> None:
-        msg = f"Failed Step: {info.error_step}\nError: <pre>{info.error_message}</pre>"
+        safe_error = html.escape(str(info.error_message))
+        msg = f"Failed Step: {info.error_step}\nError: <pre>{safe_error}</pre>"
         if info.rollback_attempted:
             rb_status = "✅ Success" if info.rollback_success else "❌ Failed"
             msg += f"\nRollback: {rb_status} ({info.rollback_details})"
