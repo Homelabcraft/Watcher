@@ -144,16 +144,25 @@ class DockerHandler:
                         bindings.append(normalized_port)
                 ports[c_port] = bindings if len(bindings) > 1 else (bindings[0] if bindings else None)
 
-        # 2. Mounts: Use Mount objects, skip anonymous
+        # 2. Mounts: Use Mount objects
         mount_objects = []
         for m in (attrs.get('Mounts') or []):
             m_type = m.get('Type')
             if m_type not in ('bind', 'volume'): continue
             target = m.get('Destination')
             source = m.get('Source') if m_type == 'bind' else m.get('Name')
-            if m_type == 'volume' and source and len(source) == 64 and all(c in '0123456789abcdef' for c in source.lower()):
-                continue
-            mount_objects.append(Mount(target=target, source=source, type=m_type, read_only=not m.get('RW', True)))
+            # Propagation is important for shared mounts
+            bind_options = m.get('BindOptions', {})
+            propagation = bind_options.get('Propagation') if bind_options else None
+            
+            # Anonymous volumes (64 hex chars) are kept as their name is valid and ensures data retention
+            mount_objects.append(Mount(
+                target=target, 
+                source=source, 
+                type=m_type, 
+                read_only=not m.get('RW', True),
+                propagation=propagation
+            ))
 
         # 3. Healthcheck: Explicit SDK mapping
         hc_orig = config.get('Healthcheck', {})
