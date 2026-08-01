@@ -57,7 +57,8 @@ class Config:
         self.failure_cooldown_seconds = self._parse_int("FAILURE_COOLDOWN_SECONDS", 3600)
         self.max_retries_before_cooldown = self._parse_int("MAX_RETRIES_BEFORE_COOLDOWN", 1)
         self.journal_enabled = self._parse_bool("JOURNAL_ENABLED", True)
-        self.journal_path = os.getenv("JOURNAL_PATH", "journal.json")
+        self.journal_path = os.getenv("JOURNAL_PATH", "/app/data/journal.json")
+        self.state_path = os.getenv("STATE_PATH", "/app/data/state.json")
         self.journal_max_entries = self._parse_int("JOURNAL_MAX_ENTRIES", 100)
         
         # New 1.6.0 Options

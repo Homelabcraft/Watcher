@@ -56,7 +56,7 @@ class WatcherService:
         )
         
         # 1.6.0 Failure tracking
-        self.failure_tracker = {} # name -> {"count": int, "cooldown_until": datetime}
+        self.failure_tracker = self.state_store.get_cooldowns()
         
         self.shutdown_event = threading.Event()
         self._setup_signals()
@@ -115,6 +115,7 @@ class WatcherService:
                 # Success/No-change clears the failure tracker
                 if name in self.failure_tracker:
                     del self.failure_tracker[name]
+                    self.state_store.set_cooldowns(self.failure_tracker)
                 return info
             if status == UpdateStatus.FAILED:
                 logger.error(f"Update check failed for {name}")
@@ -173,6 +174,7 @@ class WatcherService:
                 # Success clears the failure tracker
                 if name in self.failure_tracker:
                     del self.failure_tracker[name]
+                    self.state_store.set_cooldowns(self.failure_tracker)
                     
                 return info
             else:
@@ -228,6 +230,7 @@ class WatcherService:
         tracker["count"] += 1
         tracker["cooldown_until"] = datetime.now() + timedelta(seconds=self.config.failure_cooldown_seconds)
         self.failure_tracker[name] = tracker
+        self.state_store.set_cooldowns(self.failure_tracker)
         logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
 
     def perform_rollback(self, name: str, old_id: str) -> tuple[bool, str]:

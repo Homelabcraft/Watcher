@@ -23,7 +23,12 @@ class Journal:
                 with open(self.path, 'r', encoding='utf-8') as f:
                     self._history = json.load(f)
                     if not isinstance(self._history, list):
-                        logger.warning(f"Journal at {self.path} is invalid. Resetting.")
+                        logger.warning(f"Journal at {self.path} is invalid. Backing up and resetting.")
+                        import shutil
+                        try:
+                            shutil.copy(self.path, f"{self.path}.corrupted")
+                        except Exception:
+                            pass
                         self._history = []
             except (json.JSONDecodeError, IOError) as e:
                 logger.error(f"Failed to load journal: {e}")
@@ -38,12 +43,23 @@ class Journal:
         try:
             # History rotation: Keep only the configured max_entries
             to_save = self._history[-self.max_entries:]
-            with open(self.path, 'w', encoding='utf-8') as f:
+            self._history = to_save  # Truncate in memory too
+            temp_path = f"{self.path}.tmp"
+            with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump(to_save, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self.path)
         except IOError as e:
             logger.error(f"Failed to save journal (IO Error): {e}")
+            if os.path.exists(f"{self.path}.tmp"):
+                try: os.remove(f"{self.path}.tmp")
+                except: pass
         except Exception as e:
             logger.error(f"Unexpected journal save error: {e}")
+            if os.path.exists(f"{self.path}.tmp"):
+                try: os.remove(f"{self.path}.tmp")
+                except: pass
 
     def record_cycle(self, 
                      total_checked: int, 
