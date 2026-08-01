@@ -152,8 +152,7 @@ class DockerHandler:
             target = m.get('Destination')
             source = m.get('Source') if m_type == 'bind' else m.get('Name')
             # Propagation is important for shared mounts
-            bind_options = m.get('BindOptions', {})
-            propagation = bind_options.get('Propagation') if bind_options else None
+            propagation = m.get('Propagation') if m_type == 'bind' else None
             
             # Anonymous volumes (64 hex chars) are kept as their name is valid and ensures data retention
             mount_objects.append(Mount(
@@ -185,6 +184,17 @@ class DockerHandler:
         # 6. LogConfig
         lc_raw = host_config.get('LogConfig', {})
         log_config = LogConfig(type=lc_raw.get('Type'), config=lc_raw.get('Config')) if lc_raw.get('Type') else None
+
+        # 7. Device Requests
+        device_reqs = []
+        for d in (host_config.get('DeviceRequests') or []):
+            device_reqs.append(docker.types.DeviceRequest(
+                driver=d.get('Driver'),
+                count=d.get('Count'),
+                device_ids=d.get('DeviceIDs'),
+                capabilities=d.get('Capabilities'),
+                options=d.get('Options')
+            ))
 
         create_args = {
             "name": container.name,
@@ -219,7 +229,7 @@ class DockerHandler:
             "group_add": host_config.get('GroupAdd'),
             "tmpfs": host_config.get('Tmpfs'),
             "devices": [f"{d['PathOnHost']}:{d['PathInContainer']}:{d.get('CgroupPermissions', 'rwm')}" for d in (host_config.get('Devices') or []) if 'PathOnHost' in d],
-            "device_requests": host_config.get('DeviceRequests'),
+            "device_requests": device_reqs or None,
             "extra_hosts": {eh.split(':', 1)[0]: eh.split(':', 1)[1] for eh in (host_config.get('ExtraHosts') or []) if ':' in eh},
             "dns": host_config.get('Dns'),
             "dns_search": host_config.get('DnsSearch'),
@@ -276,6 +286,14 @@ class DockerHandler:
         try:
             old = self.client.containers.get(name)
             
+            backup_name = f"{name}_backup"
+            # PRE-CHECK: Check for backup existence BEFORE stopping main container
+            try:
+                existing = self.client.containers.get(backup_name)
+                raise RecreationError(f"Backup container {backup_name} already exists. Aborting update for safety. Please resolve manually or restart Watcher for auto-recovery.")
+            except docker.errors.NotFound: 
+                pass
+
             # Use container's specific stop timeout if defined, otherwise 15s
             stop_timeout = old.attrs.get('Config', {}).get('StopTimeout')
             timeout = int(stop_timeout) if stop_timeout is not None else 15
@@ -293,13 +311,6 @@ class DockerHandler:
                         break
                     time.sleep(2)
             
-            backup_name = f"{name}_backup"
-            try:
-                existing = self.client.containers.get(backup_name)
-                raise RecreationError(f"Backup container {backup_name} already exists. Aborting update for safety. Please resolve manually or restart Watcher for auto-recovery.")
-            except docker.errors.NotFound: 
-                pass
-
             old.rename(backup_name)
         except docker.errors.NotFound: 
             pass

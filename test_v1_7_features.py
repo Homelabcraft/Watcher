@@ -155,5 +155,56 @@ class TestV1_7Features(unittest.TestCase):
         self.assertEqual(mounts[2]["Source"], "/host/path")
         self.assertTrue(mounts[2]["ReadOnly"])
 
+    def test_gpu_device_requests(self):
+        """Device Requests: Convert HostConfig.DeviceRequests to docker.types.DeviceRequest."""
+        handler = DockerHandler(self.mock_client, self.config)
+        c = MagicMock()
+        c.name = "gpu_app"
+        c.attrs = {
+            "HostConfig": {
+                "DeviceRequests": [
+                    {
+                        "Driver": "nvidia",
+                        "Count": -1,
+                        "Capabilities": [["gpu"]]
+                    }
+                ]
+            },
+            "Config": {"Image": "test:latest"}
+        }
+        
+        plan = handler.get_recreation_plan(c)
+        device_reqs = plan["create_args"]["device_requests"]
+        self.assertIsNotNone(device_reqs)
+        self.assertEqual(len(device_reqs), 1)
+        self.assertEqual(device_reqs[0].driver, "nvidia")
+        self.assertEqual(device_reqs[0].count, -1)
+        self.assertEqual(device_reqs[0].capabilities, [["gpu"]])
+
+    def test_mount_propagation(self):
+        """Mount Propagation: Direct mapping from Mounts array."""
+        handler = DockerHandler(self.mock_client, self.config)
+        c = MagicMock()
+        c.name = "prop_app"
+        c.attrs = {
+            "HostConfig": {},
+            "Config": {"Image": "test:latest"},
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": "/host/path",
+                    "Destination": "/container/path",
+                    "RW": True,
+                    "Propagation": "rshared"
+                }
+            ]
+        }
+        
+        plan = handler.get_recreation_plan(c)
+        mounts = plan["create_args"]["mounts"]
+        self.assertEqual(len(mounts), 1)
+        self.assertEqual(mounts[0].get('BindOptions', {}).get('Propagation'), "rshared")
+
 if __name__ == '__main__':
+
     unittest.main()
