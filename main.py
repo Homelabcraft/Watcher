@@ -48,9 +48,10 @@ class WatcherService:
             logger.critical(f"Docker connection failed: {e}")
             sys.exit(1)
             
+        self.shutdown_event = threading.Event()
         self.docker = DockerHandler(self.client, self.config)
         self.notifier = build_notifier(self.config)
-        self.health = HealthMonitor(self.client)
+        self.health = HealthMonitor(self.client, self.shutdown_event)
         self.state_store = StateStore(self.config.state_path)
         self.journal = Journal(
             self.config.journal_enabled, 
@@ -61,7 +62,6 @@ class WatcherService:
         # 1.6.0 Failure tracking
         self.failure_tracker = self.state_store.get_cooldowns()
         
-        self.shutdown_event = threading.Event()
         self._setup_signals()
 
     def _setup_signals(self):

@@ -11,6 +11,7 @@ from docker.models.containers import Container
 
 from config import Config
 from docker_handler import DockerHandler, RecreationError
+from health_monitor import HealthMonitor
 from main import WatcherService
 from models import ContainerUpdateInfo, UpdateStatus
 from state_store import StateStore
@@ -205,6 +206,48 @@ class TestV1_7Features(unittest.TestCase):
         self.assertEqual(len(mounts), 1)
         self.assertEqual(mounts[0].get('BindOptions', {}).get('Propagation'), "rshared")
 
+    def test_health_monitor_start_period_invalid(self):
+        """Health Monitor: Invalid start_period should warn but continue."""
+        hm = HealthMonitor(self.mock_client)
+        c = MagicMock()
+        c.labels = {'watcher.health.start_period': '-5'}
+        self.mock_client.containers.get.return_value = c
+        
+        # _sleep should not be called with negative values
+        with patch.object(hm, '_sleep', return_value=True) as mock_sleep:
+            hm.wait_for_health("test", 1, 1)
+            # Only the initial 2s sleep and the delay sleep should be called
+            mock_sleep.assert_any_call(2)
+
+    def test_health_monitor_start_period_valid(self):
+        """Health Monitor: Valid start_period should sleep correctly."""
+        hm = HealthMonitor(self.mock_client)
+        c = MagicMock()
+        c.labels = {'watcher.health.start_period': '10'}
+        self.mock_client.containers.get.return_value = c
+        
+        with patch.object(hm, '_sleep', return_value=True) as mock_sleep:
+            hm.wait_for_health("test", 1, 1)
+            # Should sleep 10s. Should NOT sleep the initial 2s.
+            mock_sleep.assert_any_call(10)
+            with self.assertRaises(AssertionError):
+                mock_sleep.assert_any_call(2)
+
+    def test_health_monitor_shutdown_interrupt(self):
+        """Health Monitor: Should abort wait if shutdown is triggered."""
+        import threading
+        event = threading.Event()
+        hm = HealthMonitor(self.mock_client, event)
+        c = MagicMock()
+        c.labels = {'watcher.health.start_period': '10'}
+        self.mock_client.containers.get.return_value = c
+        
+        event.set() # Trigger shutdown immediately
+        result = hm.wait_for_health("test", 1, 1)
+        
+        self.assertFalse(result) # Should return false early
+
 if __name__ == '__main__':
+
 
     unittest.main()
