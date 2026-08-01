@@ -372,7 +372,32 @@ class WatcherService:
         if now >= target_dt:
             target_dt += timedelta(days=1)
             
-        return (target_dt - now).total_seconds()
+        jitter = random.uniform(0, 60)
+        return (target_dt - now).total_seconds() + jitter
+
+    def startup_recovery(self):
+        """Finds and resolves orphaned _backup containers from aborted updates."""
+        try:
+            for c in self.client.containers.list(all=True):
+                if c.name.endswith("_backup"):
+                    orig_name = c.name[:-7]
+                    logger.info(f"Found orphaned backup container: {c.name}. Checking original {orig_name}...")
+                    try:
+                        orig = self.client.containers.get(orig_name)
+                        if self.health.is_healthy(orig_name) or orig.status == "running":
+                            logger.info(f"Original {orig_name} seems to be running fine. Removing orphaned backup.")
+                            c.remove(force=True)
+                        else:
+                            logger.warning(f"Original {orig_name} exists but is not healthy. Removing it and restoring backup.")
+                            orig.remove(force=True)
+                            c.rename(orig_name)
+                            c.start()
+                    except docker.errors.NotFound:
+                        logger.warning(f"Original {orig_name} missing. Restoring from backup {c.name}.")
+                        c.rename(orig_name)
+                        c.start()
+        except Exception as e:
+            logger.error(f"Error during startup recovery: {e}")
 
     def run_cycle(self):
         cycle_start = time.perf_counter()
@@ -488,6 +513,8 @@ class WatcherService:
         
         if self.config.notify_on_startup:
             self.notifier.notify_startup(config_dict, socket.gethostname())
+            
+        self.startup_recovery()
             
         try:
             while not self.shutdown_event.is_set():

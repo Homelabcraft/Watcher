@@ -278,11 +278,9 @@ class DockerHandler:
             backup_name = f"{name}_backup"
             try:
                 existing = self.client.containers.get(backup_name)
-                existing.remove(force=True)
+                raise RecreationError(f"Backup container {backup_name} already exists. Aborting update for safety. Please resolve manually or restart Watcher for auto-recovery.")
             except docker.errors.NotFound: 
                 pass
-            except Exception as e:
-                logger.warning(f"Could not remove existing backup container {backup_name}: {e}")
 
             old.rename(backup_name)
         except docker.errors.NotFound: 
