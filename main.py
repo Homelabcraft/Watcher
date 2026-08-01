@@ -182,6 +182,13 @@ class WatcherService:
                 except StateStoreError as e:
                     self.abort_updates_for_cycle = True
                     logger.error(f"StateStoreError during update_transaction for {name}: {e}")
+                    self.notifier.notify_summary("⚠️ State Error", f"Failed to save replacement_verified state for {name}. Keeping backup and aborting further updates.")
+                    info.status = UpdateStatus.FAILED
+                    info.error_message = "State save failed before cleanup"
+                    info.error_step = "state_save"
+                    info.duration_sec = time.perf_counter() - start_time
+                    self.notifier.notify_update_failure(info)
+                    return info
                     
                 if not self.docker.remove_backup(name):
                     self.notifier.notify_summary("⚠️ Backup Removal Failed", f"Could not remove {name}_backup. Transaction retained.")
@@ -276,7 +283,13 @@ class WatcherService:
         tracker["count"] += 1
         tracker["cooldown_until"] = datetime.now() + timedelta(seconds=self.config.failure_cooldown_seconds)
         self.failure_tracker[name] = tracker
-        self.state_store.set_cooldowns(self.failure_tracker)
+        try:
+            self.state_store.set_cooldowns(self.failure_tracker)
+        except Exception as e:
+            from exceptions import StateStoreError
+            if isinstance(e, StateStoreError):
+                self.abort_updates_for_cycle = True
+            logger.error(f"Error setting cooldowns for {name}: {e}")
         logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
 
     def _best_effort_update_tx(self, name: str, phase: str):

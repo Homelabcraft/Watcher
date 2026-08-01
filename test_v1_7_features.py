@@ -402,6 +402,59 @@ class TestV1_7Features(unittest.TestCase):
         self.assertTrue(service.abort_updates_for_cycle)
         service.perform_rollback.assert_not_called()
 
+    def test_update_transaction_error_aborts_cleanup(self):
+        """StateStoreError during replacement_verified aborts cleanup but retains backup."""
+        with patch('docker.from_env', return_value=self.mock_client):
+            service = WatcherService(self.config)
+        
+        c = MagicMock(spec=Container)
+        c.name = "app"
+        c.id = "orig_123"
+        c.image.id = "img_1"
+        c.status = "running"
+        c.attrs = {"Config": {"Image": "img_1"}}
+        
+        service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "img_1", "img_2"))
+        service.docker.get_recreation_plan = MagicMock(return_value={})
+        service.docker.recreate = MagicMock(return_value=MagicMock(id="new_456"))
+        service.health.wait_for_health = MagicMock(return_value=True)
+        service.docker.remove_backup = MagicMock()
+        
+        from exceptions import StateStoreError
+        service.state_store.update_transaction = MagicMock(side_effect=StateStoreError("fail"))
+        service.perform_rollback = MagicMock()
+        
+        info = service.process_container(c, True)
+        
+        self.assertEqual(info.status, UpdateStatus.FAILED)
+        self.assertEqual(info.error_step, "state_save")
+        self.assertTrue(service.abort_updates_for_cycle)
+        service.docker.remove_backup.assert_not_called()
+        service.perform_rollback.assert_not_called()
+
+    def test_record_failure_sets_abort_flag(self):
+        """StateStoreError during set_cooldowns sets abort flag."""
+        with patch('docker.from_env', return_value=self.mock_client):
+            service = WatcherService(self.config)
+            
+        c = MagicMock(spec=Container)
+        c.name = "app"
+        c.id = "orig_123"
+        c.image.id = "img_1"
+        c.status = "running"
+        c.attrs = {"Config": {"Image": "img_1"}}
+        
+        # Force a failure during update
+        service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.FAILED, None, None))
+        
+        from exceptions import StateStoreError
+        service.state_store.set_cooldowns = MagicMock(side_effect=StateStoreError("fail cooldown"))
+        
+        info = service.process_container(c, True)
+        
+        self.assertEqual(info.status, UpdateStatus.FAILED)
+        self.assertTrue(service.abort_updates_for_cycle)
+
     def test_state_store_error_stops_cycle_updates(self):
         """Ein StateStoreError stoppt weitere Auto-Updates im selben Zyklus."""
         with patch('docker.from_env', return_value=self.mock_client):
