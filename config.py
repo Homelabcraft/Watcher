@@ -60,6 +60,7 @@ class Config:
         self.journal_path = os.getenv("JOURNAL_PATH", "/app/data/journal.json")
         self.state_path = os.getenv("STATE_PATH", "/app/data/state.json")
         self.journal_max_entries = self._parse_int("JOURNAL_MAX_ENTRIES", 100)
+        self.allow_user_fallback = self._parse_bool("ALLOW_USER_FALLBACK", False)
         
         # New 1.6.0 Options
         self.max_updates_per_cycle = self._parse_int("MAX_UPDATES_PER_CYCLE", 0) # 0 = unlimited

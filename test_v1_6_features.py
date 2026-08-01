@@ -198,8 +198,12 @@ class TestV1_6Features(unittest.TestCase):
         service.process_container = MagicMock(side_effect=mock_process)
         service.run_cycle()
         
-        # Should only have called process_container once for auto-update
-        self.assertEqual(service.process_container.call_count, 1)
+        # Should only have called process_container once for auto-update and once for report
+        self.assertEqual(service.process_container.call_count, 2)
+        args1 = service.process_container.call_args_list[0]
+        args2 = service.process_container.call_args_list[1]
+        self.assertTrue(args1[1].get('auto_update', True))
+        self.assertFalse(args2[1].get('auto_update', True))
 
 if __name__ == '__main__':
     unittest.main()

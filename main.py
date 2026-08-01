@@ -6,11 +6,13 @@ import signal
 import threading
 import socket
 import re
+import random
 from datetime import datetime, timedelta
 from typing import Optional
 
 from config import Config
 from notifier_factory import build_notifier
+from state_store import StateStore
 from docker_handler import DockerHandler
 from health_monitor import HealthMonitor
 from journal import Journal
@@ -49,6 +51,7 @@ class WatcherService:
         self.docker = DockerHandler(self.client, self.config)
         self.notifier = build_notifier(self.config)
         self.health = HealthMonitor(self.client)
+        self.state_store = StateStore(self.config.state_path)
         self.journal = Journal(
             self.config.journal_enabled, 
             self.config.journal_path, 
@@ -124,17 +127,17 @@ class WatcherService:
                 self._record_failure(name)
                 return info
 
-            # Dry Run: Record UPDATE_AVAILABLE but stop execution
-            if self.config.dry_run:
-                logger.info(f"[DRY] Update available for {name} ({info.old_image_short_id} -> {info.new_image_short_id})")
-                info.status = UpdateStatus.UPDATE_AVAILABLE
-                info.error_step = None
-                return info
-
             # Hybrid Mode: If not auto_update, we stop here and just report
             if not auto_update:
                 logger.info(f"Update available for {name}, but auto-update is not enabled. Reporting only.")
                 info.status = UpdateStatus.REPORTED
+                info.error_step = None
+                return info
+
+            # Dry Run: Record UPDATE_AVAILABLE but stop execution
+            if self.config.dry_run:
+                logger.info(f"[DRY] Update available for {name} ({info.old_image_short_id} -> {info.new_image_short_id})")
+                info.status = UpdateStatus.UPDATE_AVAILABLE
                 info.error_step = None
                 return info
 
@@ -409,7 +412,13 @@ class WatcherService:
     def run_cycle(self):
         cycle_start = time.perf_counter()
         logger.info("--- Cycle Start ---")
-        auto_update, monitor_only = self.docker.get_watched_containers()
+        try:
+            auto_update, monitor_only = self.docker.get_watched_containers()
+        except Exception as e:
+            logger.error(f"Scan aborted due to docker error: {e}")
+            self.notifier.notify_summary("🚨 Watcher Error", f"Failed to list containers: {e}")
+            self.journal.record_cycle(0, "ERROR", {"updated": [], "failed": ["Scan aborted"], "rolled_back": [], "reported": [], "skipped": []}, [], time.perf_counter() - cycle_start)
+            return
         
         total_checked = len(auto_update) + len(monitor_only)
         self.notifier.notify_scan_started(total_checked, "DRY_RUN" if self.config.dry_run else "LIVE")
@@ -436,11 +445,11 @@ class WatcherService:
                     continue
                 
                 # Check for max updates limit
+                attempt_update = is_auto
                 if is_auto and self.config.max_updates_per_cycle > 0 and update_count >= self.config.max_updates_per_cycle:
-                    logger.info(f"Max updates reached for this cycle. Skipping {c.name}.")
-                    continue
+                    attempt_update = False
 
-                info = self.process_container(c, auto_update=is_auto)
+                info = self.process_container(c, auto_update=attempt_update)
                 all_infos.append(info)
                 
                 if info.status == UpdateStatus.UPDATE_AVAILABLE:
@@ -454,8 +463,10 @@ class WatcherService:
                     update_count += 1
                 elif info.status == UpdateStatus.FAILED:
                     summary["failed"].append(info.name)
+                    if attempt_update: update_count += 1
                 elif info.status == UpdateStatus.ROLLED_BACK:
                     summary["rolled_back"].append(info.name)
+                    if attempt_update: update_count += 1
 
         handle_container_list(auto_update, True)
         handle_container_list(monitor_only, False)

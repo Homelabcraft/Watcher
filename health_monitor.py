@@ -45,14 +45,24 @@ class HealthMonitor:
         
         logger.info(f"Verifying health for {name} (Stability: {required_successes} successful checks required)...")
         
-        # Check if container has a native healthcheck
+        # Check if container has a native healthcheck and start_period
         try:
             c = self.client.containers.get(name)
+            labels = c.labels or {}
+            start_period = labels.get('watcher.health.start_period')
+            if start_period:
+                try:
+                    sp_sec = int(start_period)
+                    logger.info(f"Container {name} has start_period={sp_sec}s label. Waiting...")
+                    time.sleep(sp_sec)
+                except ValueError:
+                    pass
+            
             if c.attrs.get('State', {}).get('Health', {}).get('Status', 'none') == 'none':
                 logger.warning(f"Container {name} has no native Docker healthcheck. Stability check will only verify 'running' state.")
         except: pass
 
-        # Initial wait for container startup
+        # Initial wait for container startup if no custom start period handled it
         time.sleep(2)
 
         for i in range(max(1, retries)):

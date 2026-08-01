@@ -7,9 +7,21 @@ from docker_handler import DockerHandler
 class TestRollbackBug(unittest.TestCase):
     def setUp(self):
         self.mock_client = MagicMock()
+        self.config = MagicMock()
+        self.config.allow_user_fallback = True
+        self.config.watch_by_label = False
+        self.config.dry_run = False
         with patch('docker.from_env', return_value=self.mock_client):
             self.service = WatcherService()
-            self.service.docker.client = self.mock_client
+            self.service.docker = DockerHandler(self.mock_client, self.config)
+        
+        # Prevent "backup already exists" by throwing NotFound for _backup queries
+        def mock_get(name):
+            if name.endswith("_backup"):
+                import docker
+                raise docker.errors.NotFound("Not found")
+            return MagicMock()
+        self.mock_client.containers.get.side_effect = mock_get
 
     def test_user_handling_empty_string(self):
         """Verify that empty user strings are not passed to create_args."""
@@ -65,15 +77,23 @@ class TestRollbackBug(unittest.TestCase):
         # Create a mock container that fails to start once
         mock_container = MagicMock()
         # First call fails, second succeeds
-        mock_container.start.side_effect = [
-            docker.errors.APIError("unable to find user root: no matching entries in passwd file"),
-            None
-        ]
+        # We will set the side_effect after defining the fake error
         
         # Setup create to return the mock container twice
         self.mock_client.containers.create.return_value = mock_container
         
         # This should call create twice and return the mock_container on the second try
+        import docker
+        class FakeAPIError(docker.errors.APIError):
+            def __init__(self, msg):
+                super().__init__(msg, response=None)
+                self.msg = msg
+            def __str__(self):
+                return self.msg
+                
+        api_error = FakeAPIError("unable to find user root: no matching entries in passwd file")
+        mock_container.start.side_effect = [api_error, None]
+        
         result = self.service.docker.recreate("test", plan)
         
         self.assertEqual(result, mock_container)
@@ -100,7 +120,11 @@ class TestRollbackBug(unittest.TestCase):
         mock_container.start.side_effect = Exception("Some random docker error")
         self.mock_client.containers.create.return_value = mock_container
         
-        with self.assertRaisesRegex(Exception, "Some random docker error"):
+        # Ensure rollback doesn't crash
+        self.service.perform_rollback = MagicMock(return_value=(True, ""))
+        
+        from docker_handler import RecreationError
+        with self.assertRaisesRegex(RecreationError, "Unexpected Error: Some random docker error"):
             self.service.docker.recreate("test", plan)
             
         # Should only have called create once

@@ -74,7 +74,7 @@ class DockerHandler:
             return auto_update, monitor_only
         except Exception as e:
             logger.error(f"Error listing containers: {e}")
-            return [], []
+            raise
 
     def get_image_ref(self, container: Container) -> Optional[str]:
         """
@@ -327,7 +327,11 @@ class DockerHandler:
                             network.connect(new_container, aliases=net_config.get('Aliases'), 
                                             ipv4_address=net_config.get('IPAddress') if net_config.get('IPAddress') else None)
                     except Exception as net_e:
-                        logger.warning(f"Net-Connect error for {net_name}: {net_e}")
+                        logger.error(f"Net-Connect error for {net_name}: {net_e}")
+                        if new_container:
+                            try: new_container.remove(force=True)
+                            except: pass
+                        raise RecreationError(f"Failed to connect secondary network {net_name}: {net_e}")
                 
                 new_container.start()
                 return new_container
@@ -338,6 +342,10 @@ class DockerHandler:
                 
                 # If it's a user resolution error and we haven't tried without user yet
                 if is_user_error and "user" in ca and attempts < max_attempts:
+                    if not getattr(self.config, 'allow_user_fallback', False):
+                        logger.error(f"RECREATION FAILED for {name}: User '{ca['user']}' not found in new image. Fallback to root disabled.")
+                        raise RecreationError(f"User '{ca['user']}' not found in new image. Update aborted for safety.")
+                        
                     logger.warning(
                         f"RECREATION FAILED for {name} due to User configuration ('{ca['user']}'). "
                         "The new image might not have this user. Retrying WITHOUT user..."
