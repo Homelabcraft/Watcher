@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.0] - 2026-08-01
+### Added
+- **Crash Recovery & Startup Reconciliation (`startup_recovery()`):** Watcher now automatically detects orphaned `_backup` containers on startup resulting from unexpected host reboots or power loss during an active update. It automatically reconciles the state by checking health and safely recovering the primary or backup container.
+- **Robust Persistence & Atomicity:** Both `state.json` and `journal.json` are now written using atomic temporary files (`os.replace`) with aggressive disk syncing (`f.flush()`, `os.fsync()`) to prevent JSON corruption during power loss. Added automatic detection and backup of corrupted state files.
+- **Enhanced Container Replication:** Drastically improved bit-perfect container recreation. Added support for complex mounts (including `tmpfs`), complex device mappings, DNS configurations (`dns`, `dns_search`, `dns_opt`), capabilities (`cap_add`, `cap_drop`), CPU/Memory limits, PID modes, and custom healthcheck start periods (`StartPeriod`).
+- **Data Persistence Strategy:** Re-architected storage paths. All operational data (journal, state) is now saved to an explicitly declared `data/` volume mount point, ensuring persistence across Watcher container updates.
+- **Fault-Tolerant Multi-Notifier:** The `MultiNotifier` component now strictly isolates failures. If one configured messaging backend (e.g., Ntfy) goes down, it will no longer block or crash the delivery of notifications to other functional backends (e.g., Telegram).
+- **Telegram Notification Hardening:** Implemented strict HTML entity escaping for Telegram messages to prevent parsing errors when container names, image tags, or error messages contain sensitive characters (`<`, `>`, `&`).
+
+### Changed
+- **User Fallback Policy:** The fallback to `root` during container recreation (for images without explicit users) is now **disabled by default** to prioritize security. Set `ALLOW_USER_FALLBACK=true` to restore the old behavior.
+- **Update Rate Limiting Strictness:** `MAX_UPDATES_PER_CYCLE` now strictly counts failed attempts and network timeouts against the limit, preventing Watcher from continuously hammering registries when the limit is reached.
+- **Network Resilience (Hard Rollback):** Network disconnects or Docker API availability issues during the recreation phase now trigger an immediate hard rollback to the original container, strictly favoring availability over partial updates.
+- **Anonymous Volume Preservation:** Improved handling of Docker anonymous volumes (64-character hex strings). They are now treated explicitly to prevent data loss or detachment during container recreation.
+
+### Fixed
+- **Backup Container Deletion:** Fixed a critical bug where Watcher attempted to delete an existing, conflicting `_backup` container automatically. It now aborts the recreation for safety and leaves the conflict for manual resolution or automatic `startup_recovery()`.
+- **API Fetching Safety:** Errors during Docker daemon interactions (like `containers.list()`) now cleanly abort the cycle rather than falsely reporting 0 containers, preventing corrupted states or empty reports.
+
+
 ## [1.6.0] - 2026-04-12
 ### Added
 - **Persistent Update Journal:** Added local JSON journaling (`journal.json`) to track every scan cycle, container check, and update result across service restarts. Configurable history rotation via `JOURNAL_MAX_ENTRIES`.

@@ -1,0 +1,20 @@
+## [1.6.0] - 2026-04-12
+### Added
+- **Persistent Update Journal:** Added local JSON journaling (`journal.json`) to track every scan cycle, container check, and update result across service restarts. Configurable history rotation via `JOURNAL_MAX_ENTRIES`.
+- **Failure Cooldown:** Implemented an intelligent cooldown period (`FAILURE_COOLDOWN_SECONDS`) for containers that repeatedly fail to update, preventing excessive Docker API calls and resource churn.
+- **Optional Notifications:** Watcher no longer requires a notification backend to start. It now defaults to a `NoopNotifier` if no webhooks are configured, while maintaining strict "Fail-Fast" validation for partial configurations.
+- **Update Rate Limiting:** Added `MAX_UPDATES_PER_CYCLE` to limit the number of containers updated in a single run, preventing potential CPU/Network spikes.
+- **Advanced Filtering:** Added `EXCLUDE_CONTAINER_REGEX` support for global, pattern-based container exclusion.
+- **Granular Notification Control:**
+    - `NOTIFY_SUMMARY_STRATEGY`: Choose when to receive cycle summaries (`always`, `on_change`, or `on_error`).
+    - `NOTIFY_ON_UPDATE_START`: Option to suppress "Initiating sequence" alerts for a quieter notification feed.
+    - `NOTIFY_ON_STARTUP`: Option to disable the initial "Watcher Started" notification.
+- **Operational Toggles:**
+    - `RESTART_DEPENDENTS`: Option to globally disable the automatic restart of linked containers.
+- **Improved Failure Tracking:** Success or "No Change" results now automatically clear any active cooldowns for a container.
+- **Enhanced Configuration Validation:** Strict startup checks for all new 1.6.0 parameters.
+
+### Fixed
+- **Journal Robustness:** Improved error handling for filesystem IO errors and JSON corruption during journaling.
+- **Code Hygiene:** Eliminated remaining unsanitized exception blocks to prevent interference with system signals.
+- **Summary Logic:** Refined the definition of "Change" for the summary report strategy to strictly mean operational actions (Update, Fail, Rollback).
