@@ -285,14 +285,21 @@ class DockerHandler:
         # 1. State Capture: Stop and Rename old container
         try:
             old = self.client.containers.get(name)
+        except docker.errors.NotFound:
+            raise RecreationError(f"Original container {name} not found. Cannot proceed with recreation.")
+
+        backup_name = f"{name}_backup"
+        # PRE-CHECK: Check for backup existence BEFORE stopping main container
+        try:
+            self.client.containers.get(backup_name)
+            backup_exists = True
+        except docker.errors.NotFound:
+            backup_exists = False
             
-            backup_name = f"{name}_backup"
-            # PRE-CHECK: Check for backup existence BEFORE stopping main container
-            try:
-                existing = self.client.containers.get(backup_name)
-                raise RecreationError(f"Backup container {backup_name} already exists. Aborting update for safety. Please resolve manually or restart Watcher for auto-recovery.")
-            except docker.errors.NotFound: 
-                pass
+        if backup_exists:
+            raise RecreationError(f"Backup container {backup_name} already exists. Aborting update for safety. Please resolve manually or restart Watcher for auto-recovery.")
+
+        try:
 
             # Use container's specific stop timeout if defined, otherwise 15s
             stop_timeout = old.attrs.get('Config', {}).get('StopTimeout')
@@ -314,8 +321,6 @@ class DockerHandler:
             old.rename(backup_name)
             if state_store:
                 state_store.update_transaction(name, "backup_renamed", backup_container_id=old.id)
-        except docker.errors.NotFound: 
-            raise RecreationError(f"Original container {name} not found. Cannot proceed with recreation.")
         except Exception as e:
             raise RecreationError(f"Failed to stop/rename original container {name}: {e}")
 

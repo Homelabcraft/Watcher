@@ -280,7 +280,7 @@ class TestV1_7Features(unittest.TestCase):
         from docker_handler import DockerHandler
         from main import WatcherService
         from state_store import StateStore
-        from exceptions import RecreationError
+        from exceptions import RecreationError, StateStoreError
 
         cfg = config.Config()
         cfg.dry_run = False
@@ -288,10 +288,10 @@ class TestV1_7Features(unittest.TestCase):
         store = StateStore("tmp_state.json")
         
         # mock store._save to fail
-        store._save = MagicMock(side_effect=IOError("Disk full"))
+        store._save = MagicMock(side_effect=StateStoreError("Disk full"))
         
-        # Should raise IOError on start_transaction
-        with self.assertRaises(IOError):
+        # Should raise StateStoreError on start_transaction
+        with self.assertRaises(StateStoreError):
             store.start_transaction("app", "123", "img_1")
             
         if os.path.exists("tmp_state.json"):

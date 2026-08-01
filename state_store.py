@@ -4,6 +4,7 @@ import os
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
+from exceptions import StateStoreError
 
 logger = logging.getLogger('Watcher.StateStore')
 
@@ -72,7 +73,7 @@ class StateStore:
             if os.path.exists(f"{self.path}.tmp"):
                 try: os.remove(f"{self.path}.tmp")
                 except: pass
-            raise IOError(f"Atomic save failed for state store: {e}")
+            raise StateStoreError(f"Atomic save failed for state store: {e}")
 
     def get_cooldowns(self) -> dict:
         return self._data["cooldowns"]

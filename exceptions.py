@@ -9,3 +9,7 @@ class ConfigurationError(WatcherError):
 class RecreationError(WatcherError):
     """Raised when container recreation fails."""
     pass
+
+class StateStoreError(WatcherError):
+    """Raised when state persistence fails."""
+    pass
