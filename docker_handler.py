@@ -258,7 +258,7 @@ class DockerHandler:
             "networks": attrs.get('NetworkSettings', {}).get('Networks') or {}
         }
 
-    def recreate(self, name: str, plan: dict) -> Optional[Container]:
+    def recreate(self, name: str, plan: dict, state_store=None) -> Optional[Container]:
         if self.dry_run: return None
         ca = plan["create_args"].copy() # Work on a copy to allow retry modifications
         nets = plan["networks"]
@@ -312,6 +312,8 @@ class DockerHandler:
                     time.sleep(2)
             
             old.rename(backup_name)
+            if state_store:
+                state_store.update_transaction(name, "backup_renamed", backup_container_id=old.id)
         except docker.errors.NotFound: 
             pass
         except Exception as e:
@@ -327,6 +329,8 @@ class DockerHandler:
             try:
                 logger.info(f"Creating {name} (Attempt {attempts}/{max_attempts})...")
                 new_container = self.client.containers.create(networking_config=networking_config, **ca)
+                if state_store:
+                    state_store.update_transaction(name, "replacement_created", new_container_id=new_container.id, new_image_id=new_container.image.id)
                 
                 # Additional networks
                 for net_name, net_config in nets.items():
@@ -345,6 +349,8 @@ class DockerHandler:
                         raise RecreationError(f"Failed to connect secondary network {net_name}: {net_e}")
                 
                 new_container.start()
+                if state_store:
+                    state_store.update_transaction(name, "replacement_started")
                 return new_container
 
             except docker.errors.APIError as e:

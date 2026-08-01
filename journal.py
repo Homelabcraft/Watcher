@@ -23,19 +23,28 @@ class Journal:
                 with open(self.path, 'r', encoding='utf-8') as f:
                     self._history = json.load(f)
                     if not isinstance(self._history, list):
-                        logger.warning(f"Journal at {self.path} is invalid. Backing up and resetting.")
-                        import shutil
-                        try:
-                            shutil.copy(self.path, f"{self.path}.corrupted")
-                        except Exception:
-                            pass
+                        self._backup_corrupted()
                         self._history = []
-            except (json.JSONDecodeError, IOError) as e:
-                logger.error(f"Failed to load journal: {e}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to load journal (JSON Decode Error): {e}")
+                self._backup_corrupted()
+                self._history = []
+            except IOError as e:
+                logger.error(f"Failed to load journal (IO Error): {e}")
                 self._history = []
             except Exception as e:
                 logger.error(f"Unexpected journal load error: {e}")
                 self._history = []
+
+    def _backup_corrupted(self):
+        import shutil
+        import time
+        logger.warning(f"Journal at {self.path} is invalid/corrupted. Backing up and resetting.")
+        backup_path = f"{self.path}.corrupted_{int(time.time())}"
+        try:
+            shutil.copy(self.path, backup_path)
+        except Exception:
+            pass
 
     def _save(self):
         if not self.enabled:

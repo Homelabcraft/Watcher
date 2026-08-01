@@ -1,9 +1,9 @@
 import json
 import logging
 import os
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
-from models import UpdateStatus
 
 logger = logging.getLogger('Watcher.StateStore')
 
@@ -37,14 +37,16 @@ class StateStore:
                     else:
                         logger.warning(f"State store at {self.path} is invalid format. Backing up and resetting.")
                         import shutil
-                        try: shutil.copy(self.path, f"{self.path}.corrupted")
+                        import time
+                        try: shutil.copy(self.path, f"{self.path}.corrupted_{int(time.time())}")
                         except: pass
                         self._data = {"cooldowns": {}, "transactions": {}}
             except Exception as e:
                 logger.error(f"Failed to load state store: {e}")
                 logger.warning(f"State store at {self.path} is corrupted. Backing up and resetting.")
                 import shutil
-                try: shutil.copy(self.path, f"{self.path}.corrupted")
+                import time
+                try: shutil.copy(self.path, f"{self.path}.corrupted_{int(time.time())}")
                 except: pass
                 self._data = {"cooldowns": {}, "transactions": {}}
 
@@ -78,22 +80,30 @@ class StateStore:
         self._data["cooldowns"] = cooldowns
         self._save()
         
-    def start_transaction(self, container_name: str, original_container_id: str):
+    def start_transaction(self, container_name: str, original_container_id: str, original_image_id: str):
         """Starts an update transaction for a container."""
+        transaction_id = str(uuid.uuid4())
         self._data["transactions"][container_name] = {
+            "transaction_id": transaction_id,
             "container_name": container_name,
             "original_container_id": original_container_id,
+            "original_image_id": original_image_id,
+            "backup_name": f"{container_name}_backup",
             "backup_container_id": None,
-            "status": "prepared"
+            "new_container_id": None,
+            "new_image_id": None,
+            "phase": "prepared",
+            "created_at": datetime.now().isoformat()
         }
         self._save()
 
-    def update_transaction(self, container_name: str, status: str, backup_container_id: Optional[str] = None):
-        """Updates the status of an ongoing transaction."""
+    def update_transaction(self, container_name: str, phase: str, **kwargs):
+        """Updates the status and optional fields of an ongoing transaction."""
         if container_name in self._data["transactions"]:
-            self._data["transactions"][container_name]["status"] = status
-            if backup_container_id:
-                self._data["transactions"][container_name]["backup_container_id"] = backup_container_id
+            self._data["transactions"][container_name]["phase"] = phase
+            for k, v in kwargs.items():
+                if v is not None:
+                    self._data["transactions"][container_name][k] = v
             self._save()
 
     def end_transaction(self, container_name: str):
