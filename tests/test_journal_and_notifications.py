@@ -1,9 +1,10 @@
 import json
 import os
 import unittest
-from base_test import BaseTest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+
+from base_test import BaseTest
 
 from config import Config
 from exceptions import ConfigurationError
@@ -82,7 +83,7 @@ class TestJournalAndNotifications(BaseTest):
             self.assertTrue(service._is_in_cooldown(name))
             
             # Wait for cooldown to expire (simulated)
-            service.failure_tracker[name]["cooldown_until"] = datetime.now() - timedelta(seconds=1)
+            service.failure_tracker[name]["cooldown_until"] = datetime.now() - timedelta(seconds=1) # noqa: DTZ005
             self.assertFalse(service._is_in_cooldown(name))
             
             # Successful check should clear it

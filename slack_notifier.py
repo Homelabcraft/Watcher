@@ -22,7 +22,7 @@ class SlackNotifier:
             logger.warning("Slack webhook notification timed out.")
         except requests.exceptions.RequestException as e:
             logger.error(f"Slack notify failed: {e}")
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             logger.error(f"Unexpected error during Slack notification: {e}")
 
     def notify_scan_started(self, total_containers: int, run_mode: str) -> None:
@@ -73,7 +73,7 @@ class SlackNotifier:
             title = f"🚨 *ROLLBACK FAILED:* `{name}`"
         self._send(f"{title}\n{detail}" if detail else title)
 
-    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] = None, duration_sec: float = 0.0) -> None:
+    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
         if not summary["updated"] and not summary["failed"] and not summary["rolled_back"] and not summary.get("reported"):
             return
             
@@ -97,7 +97,7 @@ class SlackNotifier:
             lines.append(f"\n*Rolled back:* {', '.join(summary['rolled_back'])}")
         self._send("\n".join(lines))
 
-    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str = None) -> None:
+    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None:
         if not plan.updates_available and not plan.monitored_only:
             return
 

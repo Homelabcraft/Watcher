@@ -38,6 +38,7 @@ DISCORD_WEBHOOK_URL=...
 version: '3.8'
 services:
   watcher-v17-test-watcher:
+    container_name: watcher-v17-test-watcher
     build: /path/to/watcher/source
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -47,6 +48,7 @@ services:
       - "watcher.self=true"
 
   watcher-v17-test-app:
+    container_name: watcher-v17-test-app
     image: nginx:latest
     networks:
       - watcher-v17-test-net
@@ -55,9 +57,11 @@ services:
 
 volumes:
   watcher-v17-test-data:
+    name: watcher-v17-test-data
 
 networks:
   watcher-v17-test-net:
+    name: watcher-v17-test-net
 ```
 
 ## Test Scenarios (NOT YET EXECUTED)
@@ -77,7 +81,7 @@ The following scenarios must be manually executed and verified on the Linux Dock
 * [ ] **Process termination after backup rename:** Kill the Watcher process via `docker kill` immediately after the original container is renamed to `_backup`. Restart Watcher and verify `startup_recovery()` handles it.
 * [ ] **Process termination after replacement creation:** Kill the Watcher process immediately after the new container is created but before health verification finishes. Restart Watcher and verify `startup_recovery()`.
 * [ ] **Watcher restart and startup recovery:** Verify Watcher reconciles state on boot.
-* [ ] **Second Watcher instance is rejected:** Attempt to start a second container with `watcher.self=true` and verify it aborts safely.
+* [ ] **Second Watcher instance is rejected:** Attempt to start a second container with `watcher.self=true` and verify it aborts safely. Ensure any production Watcher instance on the same daemon is temporarily stopped or a separate temporary Docker VM is used.
 
 ## Cleanup and Verification
 

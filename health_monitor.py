@@ -33,14 +33,10 @@ class HealthMonitor:
                 return False
             
             # If Docker healthcheck exists, it must not be unhealthy or starting
-            if health != 'none':
-                if health in ('unhealthy', 'starting'): 
-                    return False
-            
-            return True
+            return not (health != 'none' and health in ('unhealthy', 'starting'))
         except docker.errors.NotFound:
             return False
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             logger.debug(f"Error checking health state for {name}: {e}")
             return False
 
@@ -74,12 +70,11 @@ class HealthMonitor:
             
             if c.attrs.get('State', {}).get('Health', {}).get('Status', 'none') == 'none':
                 logger.warning(f"Container {name} has no native Docker healthcheck. Stability check will only verify 'running' state.")
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             logger.debug(f"Failed to inspect health details for {name}: {e}")
 
         # Initial wait for container startup if no custom start period handled it
-        if not start_period_applied:
-            if not self._sleep(2): return False
+        if not start_period_applied and not self._sleep(2): return False
 
         max_retries = max(1, retries)
         for i in range(max_retries):
@@ -95,7 +90,6 @@ class HealthMonitor:
                 if i < max_retries - 1:
                     logger.info(f"Retrying in {delay}s...")
             
-            if i < max_retries - 1:
-                if not self._sleep(delay): return False
+            if i < max_retries - 1 and not self._sleep(delay): return False
             
         return False

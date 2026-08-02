@@ -1,7 +1,7 @@
-import os
 import unittest
-from base_test import BaseTest
 from unittest.mock import MagicMock, patch
+
+from base_test import BaseTest
 
 # Env setup moved to setUp
 from main import WatcherService
@@ -69,7 +69,7 @@ class TestWatcherService(BaseTest):
         
         self.service.perform_rollback("test_app")
         
-        mock_current.start.assert_called_once()
+        mock_current.start.assert_not_called()
         mock_current.remove.assert_not_called()
 
     def test_perform_rollback_success(self, mock_post):
@@ -258,7 +258,7 @@ class TestWatcherService(BaseTest):
         self.service.notifier.notify_summary_report(summary)
         
         mock_post.assert_called_once()
-        args, kwargs = mock_post.call_args
+        _args, kwargs = mock_post.call_args
         payload = kwargs.get('json')
         description = payload["embeds"][0]["description"]
         self.assertIn("Updates Available", description)

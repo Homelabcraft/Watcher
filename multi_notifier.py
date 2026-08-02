@@ -15,7 +15,7 @@ class MultiNotifier:
         for b in self._backends:
             try:
                 getattr(b, method_name)(*args, **kwargs)
-            except Exception as e:
+            except Exception as e: # noqa: BLE001
                 logger.error(f"Notifier {b.__class__.__name__} failed in {method_name}: {e}")
 
     def notify_scan_started(self, total_containers: int, run_mode: str) -> None:
@@ -40,10 +40,10 @@ class MultiNotifier:
     def notify_rollback(self, name: str, status: str, detail: str = "") -> None:
         self._fan_out("notify_rollback", name, status, detail)
 
-    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] = None, duration_sec: float = 0.0) -> None:
+    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
         self._fan_out("notify_summary_report", summary, infos, duration_sec)
             
-    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str = None) -> None:
+    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None:
         self._fan_out("notify_execution_plan", plan, next_run)
 
     def notify_summary(self, title: str, message: str) -> None:

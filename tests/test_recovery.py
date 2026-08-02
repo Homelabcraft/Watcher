@@ -1,9 +1,9 @@
 import os
 import unittest
-from base_test import BaseTest
 from unittest.mock import MagicMock, patch
 
 import docker.errors
+from base_test import BaseTest
 
 from config import Config
 from journal import Journal
@@ -36,9 +36,8 @@ class TestRecovery(BaseTest):
         mock_orig = MagicMock()
         mock_orig.id = "new_456"
         mock_orig.image.id = "img_1_new"
-        mock_orig.labels = {"watcher.transaction_id": list(self.service.state_store.get_transactions().values())[0]["transaction_id"]}
         mock_orig.name = "app"
-        mock_orig.labels = {"watcher.transaction_id": list(self.service.state_store.get_transactions().values())[0]["transaction_id"]}
+        mock_orig.labels = {"watcher.transaction_id": next(iter(self.service.state_store.get_transactions().values()))["transaction_id"]}
         
         def get_container(name):
             if name == "app_backup": return mock_backup
@@ -47,15 +46,13 @@ class TestRecovery(BaseTest):
         self.mock_client.containers.get.side_effect = get_container
         
         # It's in "backup_renamed", so it should restore the backup
-        with patch.object(self.service.health, 'wait_for_health', return_value=True):
+        with patch.object(self.service.health, 'wait_for_health', return_value=True) as mock_health:
             self.service.startup_recovery()
             
-        pass
-
-
-        
-        # Transaction should be deleted because rollback succeeded and health check passed
-        self.assertNotIn("app", self.service.state_store.get_transactions())
+            # Assertions for Restore strong recovery tests
+            mock_backup.remove.assert_called_once_with(force=True)
+            mock_health.assert_called_once_with("app", self.service.config.health_check_retries, self.service.config.health_check_delay)
+            self.assertNotIn("app", self.service.state_store.get_transactions())
 
     def test_recovery_wrong_original_id(self):
         """Recovery mit falscher Original Container ID"""
@@ -187,7 +184,7 @@ class TestRecovery(BaseTest):
                 raise StateStoreError("Disk full")
             original_update(name, phase, **kwargs)
             
-        with patch.object(self.service.state_store, 'update_transaction', side_effect=mock_update):
+        with patch.object(self.service.state_store, 'update_transaction', side_effect=mock_update): # noqa: SIM117
             with patch.object(self.service.health, 'wait_for_health', return_value=True):
                 success, _ = self.service.perform_rollback("app")
                 
@@ -207,7 +204,7 @@ class TestRecovery(BaseTest):
         mock_orig = MagicMock()
         mock_orig.id = "new_456"
         mock_orig.image.id = "img_1_new"
-        mock_orig.labels = {"watcher.transaction_id": list(self.service.state_store.get_transactions().values())[0]["transaction_id"]}
+        mock_orig.labels = {"watcher.transaction_id": next(iter(self.service.state_store.get_transactions().values()))["transaction_id"]}
         
         def get_container(name):
             if name == "app_backup": return mock_backup
@@ -231,7 +228,7 @@ class TestRecovery(BaseTest):
         mock_orig = MagicMock()
         mock_orig.id = "new_456"
         mock_orig.image.id = "img_1_new"
-        mock_orig.labels = {"watcher.transaction_id": list(self.service.state_store.get_transactions().values())[0]["transaction_id"]}
+        mock_orig.labels = {"watcher.transaction_id": next(iter(self.service.state_store.get_transactions().values()))["transaction_id"]}
         
         def get_container(name):
             if name == "app_backup": return mock_backup
@@ -258,7 +255,6 @@ class TestRecovery(BaseTest):
 
     def test_journal_json_decode_error(self):
         """JSONDecodeError im Journal erzeugt Sicherungsdatei"""
-        import os
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "journal.json")
@@ -266,7 +262,7 @@ class TestRecovery(BaseTest):
                 f.write("{invalid_json:")
                 
             # Initialize should trigger _load and backup
-            j = Journal(True, path)
+            Journal(True, path)
             
             # Check if corrupted file was created
             found = False
@@ -282,7 +278,7 @@ class TestRecovery(BaseTest):
         
         # Test it uses datetime exact logic
         # We can't easily mock datetime.now() perfectly, but we can verify it doesn't call random
-        with patch('random.uniform') as mock_uniform:
+        with patch('random.uniform'):
             # We already removed random import entirely from main.py, so it shouldn't be there
             import sys
             if 'main' in sys.modules:
@@ -307,7 +303,7 @@ class TestRecovery(BaseTest):
         mock_orig = MagicMock()
         mock_orig.id = "new_456"
         mock_orig.image.id = "img_1_new"
-        mock_orig.labels = {"watcher.transaction_id": list(self.service.state_store.get_transactions().values())[0]["transaction_id"]}
+        mock_orig.labels = {"watcher.transaction_id": next(iter(self.service.state_store.get_transactions().values()))["transaction_id"]}
         
         def get_container(name):
             if name == "app_backup": return mock_backup
@@ -318,7 +314,6 @@ class TestRecovery(BaseTest):
         with patch.object(self.service.health, 'wait_for_health', return_value=True):
             self.service.startup_recovery()
             
-        pass
 
 
     def test_backup_id_none_original_id_mismatch(self):
@@ -372,7 +367,7 @@ class TestRecovery(BaseTest):
         mock_orig = MagicMock()
         mock_orig.id = "new_456"
         mock_orig.image.id = "img_1_new"
-        mock_orig.labels = {"watcher.transaction_id": list(self.service.state_store.get_transactions().values())[0]["transaction_id"]}
+        mock_orig.labels = {"watcher.transaction_id": next(iter(self.service.state_store.get_transactions().values()))["transaction_id"]}
         
         def get_container(name):
             if name == "app_backup": return mock_backup
@@ -456,10 +451,10 @@ class TestRecovery(BaseTest):
         mock_orig = MagicMock()
         mock_orig.id = "new_456"
         mock_orig.image.id = "img_1_new"
-        mock_orig.labels = {"watcher.transaction_id": list(self.service.state_store.get_transactions().values())[0]["transaction_id"]}
+        mock_orig.labels = {"watcher.transaction_id": next(iter(self.service.state_store.get_transactions().values()))["transaction_id"]}
         mock_orig.image.id = "img_2"
         mock_orig.name = "app"
-        mock_orig.labels = {"watcher.transaction_id": list(self.service.state_store.get_transactions().values())[0]["transaction_id"]}
+        mock_orig.labels = {"watcher.transaction_id": next(iter(self.service.state_store.get_transactions().values()))["transaction_id"]}
         
         def get_container(name):
             if name == "app": return mock_orig

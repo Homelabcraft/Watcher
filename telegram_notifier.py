@@ -33,7 +33,7 @@ class TelegramNotifier:
             logger.warning("Telegram webhook notification timed out.")
         except requests.exceptions.RequestException as e:
             logger.error(f"Telegram notify failed: {e}")
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             logger.error(f"Unexpected error during Telegram notification: {e}")
 
     def notify_scan_started(self, total_containers: int, run_mode: str) -> None:
@@ -87,7 +87,7 @@ class TelegramNotifier:
         else:
             self._send(f"🚨 ROLLBACK FAILED: {name}", safe_detail)
 
-    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] = None, duration_sec: float = 0.0) -> None:
+    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
         if not summary["updated"] and not summary["failed"] and not summary["rolled_back"] and not summary.get("reported"):
             return
             
@@ -112,7 +112,7 @@ class TelegramNotifier:
             lines.append(f"Skipped (Cooldown):\n- {chr(10) + '- '.join([format_info(n) for n in summary['skipped']])}")
         self._send(f"📊 Watcher Scan Summary ({duration_sec:.1f}s)", "\n".join(lines))
 
-    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str = None) -> None:
+    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None:
         if not plan.updates_available and not plan.monitored_only:
             return
 

@@ -1,10 +1,9 @@
+import copy
 import json
 import logging
 import os
-import uuid
-import copy
 import shutil
-import time
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -32,25 +31,25 @@ class StateStore:
                             data["transactions"] = {}
                             
                         # Convert ISO strings back to datetime
-                        for k, v in data["cooldowns"].items():
+                        for v in data["cooldowns"].values():
                             if "cooldown_until" in v and isinstance(v["cooldown_until"], str):
                                 try:
                                     v["cooldown_until"] = datetime.fromisoformat(v["cooldown_until"])
                                 except ValueError:
-                                    v["cooldown_until"] = datetime.min
+                                    v["cooldown_until"] = datetime.min # noqa: DTZ901
                         self._data = data
                     else:
                         logger.warning(f"State store at {self.path} is invalid format. Backing up and resetting.")
                         import time
                         try: shutil.copy(self.path, f"{self.path}.corrupted_{int(time.time())}")
-                        except: pass
+                        except: pass # noqa: E722, S110
                         self._data = {"cooldowns": {}, "transactions": {}}
-            except Exception as e:
+            except Exception as e: # noqa: BLE001
                 logger.error(f"Failed to load state store: {e}")
                 logger.warning(f"State store at {self.path} is corrupted. Backing up and resetting.")
                 import time
                 try: shutil.copy(self.path, f"{self.path}.corrupted_{int(time.time())}")
-                except: pass
+                except: pass # noqa: E722, S110
                 self._data = {"cooldowns": {}, "transactions": {}}
 
     def _save(self):
@@ -60,7 +59,7 @@ class StateStore:
             for k, v in self._data["cooldowns"].items():
                 to_save["cooldowns"][k] = {
                     "count": v.get("count", 0),
-                    "cooldown_until": v["cooldown_until"].isoformat() if isinstance(v.get("cooldown_until"), datetime) else datetime.min.isoformat()
+                    "cooldown_until": v["cooldown_until"].isoformat() if isinstance(v.get("cooldown_until"), datetime) else datetime.min.isoformat() # noqa: DTZ901
                 }
                 
             os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
@@ -70,11 +69,11 @@ class StateStore:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, self.path)
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             logger.error(f"Failed to save state store: {e}")
             if os.path.exists(f"{self.path}.tmp"):
                 try: os.remove(f"{self.path}.tmp")
-                except: pass
+                except: pass # noqa: E722, S110
             raise StateStoreError(f"Atomic save failed for state store: {e}")
 
     def get_cooldowns(self) -> dict:
@@ -107,7 +106,7 @@ class StateStore:
                 "new_container_id": None,
                 "new_image_id": None,
                 "phase": "prepared",
-                "created_at": datetime.now().isoformat()
+                "created_at": datetime.now().isoformat() # noqa: DTZ005
             }
             self._save()
             return transaction_id

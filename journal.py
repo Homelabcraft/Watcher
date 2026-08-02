@@ -32,7 +32,7 @@ class Journal:
             except OSError as e:
                 logger.error(f"Failed to load journal (IO Error): {e}")
                 self._history = []
-            except Exception as e:
+            except Exception as e: # noqa: BLE001
                 logger.error(f"Unexpected journal load error: {e}")
                 self._history = []
 
@@ -43,7 +43,7 @@ class Journal:
         backup_path = f"{self.path}.corrupted_{int(time.time())}"
         try:
             shutil.copy(self.path, backup_path)
-        except Exception:
+        except Exception: # noqa: BLE001, S110
             pass
 
     def _save(self):
@@ -65,12 +65,12 @@ class Journal:
             logger.error(f"Failed to save journal (IO Error): {e}")
             if os.path.exists(f"{self.path}.tmp"):
                 try: os.remove(f"{self.path}.tmp")
-                except: pass
-        except Exception as e:
+                except: pass # noqa: E722, S110
+        except Exception as e: # noqa: BLE001
             logger.error(f"Unexpected journal save error: {e}")
             if os.path.exists(f"{self.path}.tmp"):
                 try: os.remove(f"{self.path}.tmp")
-                except: pass
+                except: pass # noqa: E722, S110
 
     def record_cycle(self, 
                      total_checked: int, 
@@ -101,7 +101,7 @@ class Journal:
             })
 
         entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat(), # noqa: DTZ005
             "run_mode": run_mode,
             "duration_sec": round(duration_sec, 2),
             "checked_containers": total_checked,

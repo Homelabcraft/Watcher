@@ -1,8 +1,10 @@
 import os
+
 os.environ["UNITTEST_MODE"] = "1"
 import tempfile
 import unittest
 from unittest.mock import patch
+
 
 class BaseTest(unittest.TestCase):
     def setUp(self):

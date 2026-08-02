@@ -106,7 +106,7 @@ class TestStateStoreAndFeatures(BaseTest):
         handler = DockerHandler(self.mock_client, self.config)
         self.mock_client.containers.list.side_effect = Exception("API Down")
         
-        with self.assertRaises(Exception):
+        with self.assertRaises(Exception): # noqa: B017
             handler.get_watched_containers()
 
     def test_user_fallback_disabled(self):
@@ -282,7 +282,7 @@ class TestStateStoreAndFeatures(BaseTest):
 
         cfg = config.Config()
         cfg.dry_run = False
-        client = MagicMock()
+        MagicMock()
         store = StateStore(self.state_path)
         
         # mock store._save to fail
@@ -317,11 +317,10 @@ class TestStateStoreAndFeatures(BaseTest):
             store.start_transaction("app", "orig", "img", "img_new")
             
             # mock atomarer save schlägt fehl
-            original_save = store._save
             def mock_save():
                 raise StateStoreError("Disk full")
             
-            with patch.object(store, '_save', side_effect=mock_save):
+            with patch.object(store, '_save', side_effect=mock_save): # noqa: SIM117
                 with self.assertRaises(StateStoreError):
                     store.update_transaction("app", "hacked")
                     
@@ -593,7 +592,7 @@ class TestStateStoreAndFeatures(BaseTest):
             notifier.notify_execution_plan(plan)
             
             mock_post.assert_called_once()
-            args, kwargs = mock_post.call_args
+            _args, kwargs = mock_post.call_args
             text = kwargs['json']['text']
             
             self.assertIn("app&lt;bad&gt;", text)

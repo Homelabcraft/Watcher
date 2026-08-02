@@ -26,10 +26,10 @@ class NoopNotifier:
     def notify_rollback(self, name: str, status: str, detail: str = "") -> None:
         pass
 
-    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] = None, duration_sec: float = 0.0) -> None:
+    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
         pass
         
-    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str = None) -> None:
+    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None:
         pass
 
     def notify_summary(self, title: str, message: str) -> None:

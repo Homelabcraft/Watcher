@@ -20,10 +20,10 @@ class DiscordNotifier:
             logger.warning("Discord webhook notification timed out.")
         except requests.exceptions.RequestException as e:
             logger.error(f"Discord notify failed: {e}")
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             logger.error(f"Unexpected error during Discord notification: {e}")
 
-    def send_event(self, title: str, description: str, color: int = 0x3498db, fields: list = None):
+    def send_event(self, title: str, description: str, color: int = 0x3498db, fields: list | None = None):
         embed = {
             "title": title,
             "description": description,
@@ -85,7 +85,7 @@ class DiscordNotifier:
         else:
             self.send_event(f"🚨 ROLLBACK FAILED: {name}", detail, color=0xc0392b)
 
-    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] = None, duration_sec: float = 0.0) -> None:
+    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
         if not summary["updated"] and not summary["failed"] and not summary["rolled_back"] and not summary.get("reported"):
             return
 
@@ -113,7 +113,7 @@ class DiscordNotifier:
 
         self.send_event("Cycle Complete", "\n".join(lines), color=0x9b59b6)
 
-    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str = None) -> None:
+    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None:
         if not plan.updates_available and not plan.monitored_only:
             return
 

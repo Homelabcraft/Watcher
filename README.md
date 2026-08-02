@@ -1,6 +1,6 @@
 # 🛡️ Watcher
 
-[![Python Version](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.12-blue?style=flat-square)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat-square&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Version](https://img.shields.io/badge/version-v1.7.0-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
@@ -58,7 +58,7 @@ services:
     image: my-app:latest
     labels:
       - "watcher.enable=true"  # Auto-update: Full lifecycle management.
-      - "watcher.depends_on=database" # Restarts web-app if database is updated.
+      - "watcher.depends_on=database" # Restarts this container if 'database' is updated.
 ```
 
 ---
@@ -85,7 +85,7 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 2.  **State Preservation:** The active container is stopped and renamed to `${NAME}_backup`, preserving its exact state.
 3.  **Hardened Recreation:** A new container is provisioned with close configuration parity.
 4.  **Health Verification:** A multi-stage poll validates the new container's status and internal Docker health checks.
-5.  **Atomic Cleanup:** Only upon confirmed health is the backup removed. On failure, an **automated rollback** restores the original container instantly.
+5.  **Verified Cleanup:** Only upon confirmed health is the backup removed. On failure, an **automated rollback** attempts to restore the validated backup container.
 
 ---
 
@@ -148,7 +148,7 @@ This project is licensed under the **MIT License**. It is designed for use in ho
 
 ---
 
-## ?? Known Limitations & Behavior
+## ⚠️ Known Limitations & Behavior
 
 * **Ignored Tags:** Fixed tags and digests are ignored. Watcher exclusively operates on :latest tags.
 * **Image Caching:** Monitor-only checks and dry-run checks still pull :latest into the Docker image cache to accurately compare image digests. This means a later manual recreation of a container may use the newly pulled image inadvertently.

@@ -1,8 +1,8 @@
 import unittest
-from base_test import BaseTest
 from unittest.mock import MagicMock, patch
 
 import docker
+from base_test import BaseTest
 
 from docker_handler import DockerHandler
 from main import WatcherService
@@ -52,7 +52,7 @@ class TestRollback(BaseTest):
         # This should NOT raise IndexError
         try:
             self.service.docker.recreate("test", plan)
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             if isinstance(e, IndexError):
                 self.fail("recreate() raised IndexError unexpectedly!")
             # Other errors are expected because we use mocks incorrectly here, 
@@ -65,7 +65,7 @@ class TestRollback(BaseTest):
         # This should NOT raise IndexError
         try:
             self.service.perform_rollback("test")
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             self.fail(f"perform_rollback() raised {type(e).__name__} unexpectedly: {e}")
 
     def test_recreate_retry_on_user_error_success(self):
@@ -164,7 +164,7 @@ class TestRollback(BaseTest):
         self.mock_client.containers.list.return_value = [c]
         self.service.config.watch_by_label = False # Default mode
         
-        auto, monitor = self.service.docker.get_watched_containers()
+        auto, _monitor = self.service.docker.get_watched_containers()
         self.assertIn(c, auto)
         self.assertEqual(len(auto), 1)
 

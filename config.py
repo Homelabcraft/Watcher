@@ -112,15 +112,15 @@ class Config:
         if self.health_check_delay < 1:
             raise ConfigurationError("HEALTH_CHECK_DELAY must be at least 1 second.")
 
-        if self.discord_webhook_url:
+        if self.discord_webhook_url: # noqa: SIM102
             if not (self.discord_webhook_url.startswith("http://") or self.discord_webhook_url.startswith("https://")):
                 raise ConfigurationError("DISCORD_WEBHOOK_URL must start with http:// or https://")
 
-        if self.slack_webhook_url:
+        if self.slack_webhook_url: # noqa: SIM102
             if not (self.slack_webhook_url.startswith("http://") or self.slack_webhook_url.startswith("https://")):
                 raise ConfigurationError("SLACK_WEBHOOK_URL must start with http:// or https://")
 
-        if self.ntfy_url:
+        if self.ntfy_url: # noqa: SIM102
             if not (self.ntfy_url.startswith("http://") or self.ntfy_url.startswith("https://")):
                 raise ConfigurationError("NTFY_URL must start with http:// or https://")
 
