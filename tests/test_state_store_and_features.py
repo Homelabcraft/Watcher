@@ -99,7 +99,8 @@ class TestStateStoreAndFeatures(BaseTest):
                 journal.record_cycle(1, "OK", {}, [], 1.0)
                 mock_replace.assert_called_with(path + ".tmp", path)
         finally:
-            pass
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_docker_list_error(self):
         """Fehler bei Docker Container Listing: Must abort cycle, not report 0 containers."""
@@ -327,7 +328,8 @@ class TestStateStoreAndFeatures(BaseTest):
             internal = store.get_transactions()
             self.assertEqual(internal["app"]["phase"], "prepared")
         finally:
-            pass
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_end_transaction_keeps_transaction_on_fail(self):
         """fehlgeschlagenes end_transaction behält Transaktion"""
@@ -345,7 +347,8 @@ class TestStateStoreAndFeatures(BaseTest):
                 store.end_transaction("app")
             self.assertIn("app", store.get_transactions())
         finally:
-            pass
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_set_cooldowns_keeps_previous_on_fail(self):
         """fehlgeschlagenes set_cooldowns behält vorherige Cooldowns"""
@@ -362,7 +365,8 @@ class TestStateStoreAndFeatures(BaseTest):
                 store.set_cooldowns({"app": {"count": 1}})
             self.assertEqual(store.get_cooldowns(), {})
         finally:
-            pass
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_defensive_cooldown_getter(self):
         """get_cooldowns() gibt defensive Kopie zurück"""
@@ -383,7 +387,8 @@ class TestStateStoreAndFeatures(BaseTest):
             self.assertEqual(internal["app"]["count"], 1)
             self.assertNotIn("new_app", internal)
         finally:
-            pass
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_set_cooldowns_aliasing(self):
         """set_cooldowns() behält interne Kopie, Ändern des übergebenen dicts ändert internen Status nicht"""
@@ -405,7 +410,8 @@ class TestStateStoreAndFeatures(BaseTest):
             internal = store.get_cooldowns()
             self.assertEqual(internal["app"]["count"], 1)
         finally:
-            pass
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_defensive_transaction_getter(self):
         """get_transactions() gibt defensive Kopie zurück"""
@@ -426,7 +432,8 @@ class TestStateStoreAndFeatures(BaseTest):
             self.assertEqual(internal["app"]["phase"], "prepared")
             self.assertNotIn("new_app", internal)
         finally:
-            pass
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_end_transaction_error_after_cleanup(self):
         """Fehler bei end_transaction nach erfolgreichem Cleanup löst keinen Rollback aus."""

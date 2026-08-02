@@ -56,7 +56,7 @@ class Config:
         # Cleanup
         self.cleanup_old_images = self._parse_bool("CLEANUP_OLD_IMAGES", False)
         
-        # 1.6.0 Cooldown & Journal
+        # Cooldown & Journal
         self.failure_cooldown_seconds = self._parse_int("FAILURE_COOLDOWN_SECONDS", 3600)
         self.max_retries_before_cooldown = self._parse_int("MAX_RETRIES_BEFORE_COOLDOWN", 1)
         self.journal_enabled = self._parse_bool("JOURNAL_ENABLED", True)
@@ -65,7 +65,7 @@ class Config:
         self.journal_max_entries = self._parse_int("JOURNAL_MAX_ENTRIES", 100)
         self.allow_user_fallback = self._parse_bool("ALLOW_USER_FALLBACK", False)
         
-        # New 1.6.0 Options
+        # New Options
         self.max_updates_per_cycle = self._parse_int("MAX_UPDATES_PER_CYCLE", 0) # 0 = unlimited
         self.restart_dependents = self._parse_bool("RESTART_DEPENDENTS", True)
         self.notify_on_startup = self._parse_bool("NOTIFY_ON_STARTUP", True)
