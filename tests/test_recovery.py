@@ -9,7 +9,7 @@ from journal import Journal
 from main import WatcherService
 
 
-class TestV17Recovery(unittest.TestCase):
+class TestRecovery(unittest.TestCase):
     def setUp(self):
         self.mock_client = MagicMock()
         self.config = Config()

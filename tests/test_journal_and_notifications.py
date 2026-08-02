@@ -10,7 +10,7 @@ from main import WatcherService
 from models import ContainerUpdateInfo, UpdateStatus
 
 
-class TestV1_6Features(unittest.TestCase):
+class TestJournalAndNotifications(unittest.TestCase):
     def setUp(self):
         self.old_env = os.environ.copy()
         # Mock docker environment

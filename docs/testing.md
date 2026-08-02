@@ -2,10 +2,10 @@
 
 Before deploying Watcher into production, it is highly recommended to test the update lifecycle in a safe, controlled environment (Sandbox). 
 
-This project includes automated unit tests that verify the critical execution paths without needing a live Docker environment or a real Discord webhook.
+This project includes automated unit tests that verify the critical execution paths without needing a live Docker environment or a real Discord webhook. **However, unit tests do not replace real Docker integration tests!**
 
 ## 1. Running Automated Tests
-The `test_main.py` file covers the core logic:
+The unit tests cover the core logic:
 - Successful updates
 - Failed updates triggering a rollback
 - Rollbacks recovering from a rename failure
@@ -14,12 +14,14 @@ The `test_main.py` file covers the core logic:
 
 **Run the tests using:**
 ```bash
-python -m unittest test_main.py
+python -m unittest discover -s tests -p "test_*.py" -v
 ```
 All tests use `unittest.mock` to simulate Docker and HTTP requests, meaning they are completely safe to run anywhere.
 
 ## 2. Sandbox Testing (Controlled Live Test)
-To verify the watcher with real containers, follow these steps:
+To verify the watcher with real containers, follow these steps using harmless `:latest` test containers.
+
+**Important Note on Tags:** Watcher *exclusively* tracks and updates containers running a `:latest` tag. Containers with fixed tags (e.g. `nginx:1.24` or `redis:alpine`) or explicit SHAs are completely ignored by design.
 
 1. Create a `docker-compose.yml` for your test:
    ```yaml
@@ -31,17 +33,17 @@ To verify the watcher with real containers, follow these steps:
        env_file: .env
        labels:
          - "watcher.self=true"
-       stop_grace_period: 2m
+       stop_grace_period: 5m
          
      web_app:
-       image: nginx:1.24
+       image: nginx:latest
        ports:
          - "8080:80"
        labels:
          - "watcher.enable=true"
          
      db_backend:
-       image: redis:alpine
+       image: redis:latest
        labels:
          - "watcher.depends_on=web_app"
    ```
@@ -55,20 +57,20 @@ To verify the watcher with real containers, follow these steps:
 
 3. Start your environment:
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
 4. Trigger an update by manually overriding the image tag of `web_app`:
    ```bash
-   # Pull the real latest image
-   docker pull nginx:latest
-   # Tag it so Watcher thinks it needs to update the local 'latest' (which is currently 1.24)
+   # Pull an older image
+   docker pull nginx:1.24
+   # Tag it so the local 'latest' is outdated
    docker tag nginx:1.24 nginx:latest
    ```
    
-Watcher should detect the change, restart `web_app`, and subsequently restart `db_backend`. Check your Discord channel for the summary report.
+Watcher should detect the change when it pulls the real `nginx:latest`, restart `web_app`, and subsequently restart `db_backend`. Check your Discord channel for the summary report.
 
-## 3. Testing v1.5 Safety Features
+## 3. Safety Features Testing
 
 ### Dry Run / Execution Plan
 Set `DRY_RUN=true` in your `.env`. When you run Watcher, it will generate a detailed **Execution Plan** and send it to Discord. 
@@ -80,12 +82,12 @@ Set `SCHEDULE_TIME=14:30` (or any time slightly in the future) in your `.env`. W
 
 ### Fail-Fast Configuration
 Set an invalid configuration in your `.env` (e.g., `CHECK_INTERVAL=-1` or `CHECK_INTERVAL=5`). 
-Run `docker-compose up -d watcher` and check the logs: `docker logs watcher`. 
+Run `docker compose up -d watcher` and check the logs: `docker logs watcher`.
 Watcher should exit immediately with a clear `ConfigurationError` and `Exit Code 1`.
 
 ### Graceful Shutdown
-While Watcher is in the middle of pulling an image or recreating a container, run `docker-compose stop watcher`.
-Because of the new `SIGTERM` handler and `stop_grace_period: 2m`, Watcher will log `Graceful shutdown initiated`. It does not forcefully abort blocking Docker API calls, but rather flags the shutdown, finishes the current critical update step (including health checks and rollback if necessary), and then exits safely.
+While Watcher is in the middle of pulling an image or recreating a container, run `docker compose stop watcher`.
+Because of the `SIGTERM` handler and `stop_grace_period: 5m`, Watcher will log `Graceful shutdown initiated`. It does not forcefully abort blocking Docker API calls, but rather flags the shutdown, finishes the current critical update step (including health checks and rollback if necessary), and then exits safely.
 
 ## 4. Protecting the Watcher
 Always ensure your Watcher container has the `watcher.self=true` label if you are running it alongside the containers it monitors. This guarantees it will never attempt to update or restart itself, preventing a broken state.

@@ -7,7 +7,7 @@ from docker_handler import DockerHandler
 from main import WatcherService
 
 
-class TestRollbackBug(unittest.TestCase):
+class TestRollback(unittest.TestCase):
     def setUp(self):
         self.mock_client = MagicMock()
         self.config = MagicMock()

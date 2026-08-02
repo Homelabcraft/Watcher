@@ -34,7 +34,7 @@ class Config:
         self.reg_pass = os.getenv("REGISTRY_PASSWORD")
         
         # Selection & Exclusion
-        self.watch_by_label = self._parse_bool("WATCH_BY_LABEL", False)
+        self.watch_by_label = self._parse_bool("WATCH_BY_LABEL", True)
         self.watch_label_key = os.getenv("WATCH_LABEL_KEY", "watcher.enable")
         self.watch_label_value = os.getenv("WATCH_LABEL_VALUE", "true")
         

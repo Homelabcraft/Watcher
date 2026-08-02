@@ -97,7 +97,7 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | :--- | :--- | :--- |
 | `CHECK_INTERVAL` | `86400` | Scan frequency in seconds (Default: 24h). Ignored if `SCHEDULE_TIME` is set. |
 | `SCHEDULE_TIME`  | `""`    | Optional: Run Watcher once daily at this specific local time (e.g. `03:00`). |
-| `WATCH_BY_LABEL` | `false`  | If true, only containers with `watcher.enable=true` are updated. |
+| `WATCH_BY_LABEL` | `true`  | If true, only containers with `watcher.enable=true` are updated. |
 | `DRY_RUN`        | `false` | Generates a detailed Execution Plan to your configured messengers. |
 | `STATE_PATH` | `/app/data/state.json` | Path to persistent state file for recovery. |
 | `ALLOW_USER_FALLBACK` | `false` | If true, permits recreating a container as `root` if the configured user is missing in the new image. |
@@ -133,6 +133,13 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | `watcher.self` | `true` | **Mandatory:** Protects the Watcher instance from self-updating. |
 | `watcher.health.start_period` | `0` | Seconds to wait before starting health checks. |
 | `watcher.depends_on` | `app1,app2` | Comma-separated list of containers to restart after this one updates. |
+
+---
+
+## 🧪 Testing
+
+Before running Watcher in a production environment, you should verify its operation in a sandbox.
+Please refer to the [Testing Guide](docs/testing.md) for automated unit testing and sandbox instructions.
 
 ---
 
