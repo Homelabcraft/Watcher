@@ -1,6 +1,5 @@
 import datetime
 import logging
-from typing import Optional
 
 import requests
 
@@ -10,7 +9,7 @@ logger = logging.getLogger('Watcher.Discord')
 
 class DiscordNotifier:
     """Sends structured Discord notifications for the update lifecycle."""
-    def __init__(self, webhook_url: Optional[str]):
+    def __init__(self, webhook_url: str | None):
         self.webhook_url = webhook_url
 
     def _send(self, payload: dict):

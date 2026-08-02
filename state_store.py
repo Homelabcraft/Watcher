@@ -2,8 +2,11 @@ import json
 import logging
 import os
 import uuid
+import copy
+import shutil
+import time
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 
 from exceptions import StateStoreError
 
@@ -38,7 +41,6 @@ class StateStore:
                         self._data = data
                     else:
                         logger.warning(f"State store at {self.path} is invalid format. Backing up and resetting.")
-                        import shutil
                         import time
                         try: shutil.copy(self.path, f"{self.path}.corrupted_{int(time.time())}")
                         except: pass
@@ -46,7 +48,6 @@ class StateStore:
             except Exception as e:
                 logger.error(f"Failed to load state store: {e}")
                 logger.warning(f"State store at {self.path} is corrupted. Backing up and resetting.")
-                import shutil
                 import time
                 try: shutil.copy(self.path, f"{self.path}.corrupted_{int(time.time())}")
                 except: pass
@@ -77,11 +78,9 @@ class StateStore:
             raise StateStoreError(f"Atomic save failed for state store: {e}")
 
     def get_cooldowns(self) -> dict:
-        import copy
         return copy.deepcopy(self._data["cooldowns"])
 
     def set_cooldowns(self, cooldowns: dict):
-        import copy
         old_data = copy.deepcopy(self._data)
         try:
             self._data["cooldowns"] = copy.deepcopy(cooldowns)
@@ -89,9 +88,11 @@ class StateStore:
         except StateStoreError:
             self._data = old_data
             raise
-    def start_transaction(self, container_name: str, original_container_id: str, original_image_id: str):
+    def start_transaction(self, container_name: str, original_container_id: str, original_image_id: str, planned_new_image_id: str) -> str:
         """Starts an update transaction for a container."""
-        import copy
+        if container_name in self._data.get("transactions", {}):
+            raise StateStoreError(f"Transaction already exists for container {container_name}")
+            
         old_data = copy.deepcopy(self._data)
         transaction_id = str(uuid.uuid4())
         try:
@@ -100,6 +101,7 @@ class StateStore:
                 "container_name": container_name,
                 "original_container_id": original_container_id,
                 "original_image_id": original_image_id,
+                "planned_new_image_id": planned_new_image_id,
                 "backup_name": f"{container_name}_backup",
                 "backup_container_id": None,
                 "new_container_id": None,
@@ -108,28 +110,29 @@ class StateStore:
                 "created_at": datetime.now().isoformat()
             }
             self._save()
+            return transaction_id
         except StateStoreError:
             self._data = old_data
             raise
 
     def update_transaction(self, container_name: str, phase: str, **kwargs):
         """Updates the status and optional fields of an ongoing transaction."""
-        import copy
-        if container_name in self._data["transactions"]:
-            old_data = copy.deepcopy(self._data)
-            try:
-                self._data["transactions"][container_name]["phase"] = phase
-                for k, v in kwargs.items():
-                    if v is not None:
-                        self._data["transactions"][container_name][k] = v
-                self._save()
-            except StateStoreError:
-                self._data = old_data
-                raise
+        if container_name not in self._data.get("transactions", {}):
+            raise StateStoreError(f"No active transaction for container {container_name}")
+            
+        old_data = copy.deepcopy(self._data)
+        try:
+            self._data["transactions"][container_name]["phase"] = phase
+            for k, v in kwargs.items():
+                if v is not None:
+                    self._data["transactions"][container_name][k] = v
+            self._save()
+        except StateStoreError:
+            self._data = old_data
+            raise
 
     def end_transaction(self, container_name: str):
         """Removes a completed transaction."""
-        import copy
         if container_name in self._data["transactions"]:
             old_data = copy.deepcopy(self._data)
             try:
@@ -139,7 +142,6 @@ class StateStore:
                 self._data = old_data
                 raise
 
-    def get_transactions(self) -> Dict[str, Any]:
+    def get_transactions(self) -> dict[str, Any]:
         """Returns all ongoing transactions."""
-        import copy
         return copy.deepcopy(self._data.get("transactions", {}))

@@ -1,6 +1,7 @@
 import json
 import os
 import unittest
+from base_test import BaseTest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -10,9 +11,9 @@ from main import WatcherService
 from models import ContainerUpdateInfo, UpdateStatus
 
 
-class TestJournalAndNotifications(unittest.TestCase):
+class TestJournalAndNotifications(BaseTest):
     def setUp(self):
-        self.old_env = os.environ.copy()
+        super().setUp()
         # Mock docker environment
         self.mock_docker_client = MagicMock()
         self.patcher = patch('docker.from_env', return_value=self.mock_docker_client)
@@ -28,8 +29,6 @@ class TestJournalAndNotifications(unittest.TestCase):
 
     def tearDown(self):
         self.patcher.stop()
-        os.environ.clear()
-        os.environ.update(self.old_env)
 
 
     def test_start_without_notifications(self):
@@ -120,8 +119,6 @@ class TestJournalAndNotifications(unittest.TestCase):
                 self.assertEqual(data[0]["summary"]["updated"], ["app1"])
                 self.assertEqual(data[0]["events"][0]["name"], "app1")
         finally:
-            if os.path.exists(path):
-                os.remove(path)
             if "JOURNAL_PATH" in os.environ:
                 del os.environ["JOURNAL_PATH"]
 
@@ -202,8 +199,6 @@ class TestJournalAndNotifications(unittest.TestCase):
                 service.journal.record_cycle(1, "LIVE", {}, [], 1.0)
             self.assertEqual(len(service.journal._history), 1)
         finally:
-            if os.path.exists(path):
-                os.remove(path)
             if "JOURNAL_PATH" in os.environ:
                 del os.environ["JOURNAL_PATH"]
 

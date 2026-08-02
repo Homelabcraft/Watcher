@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import docker
+from base_test import BaseTest
 from docker.models.containers import Container
 
 from config import Config
@@ -16,8 +17,9 @@ from state_store import StateStore
 from telegram_notifier import TelegramNotifier
 
 
-class TestV1_7Features(unittest.TestCase):
+class TestStateStoreAndFeatures(BaseTest):
     def setUp(self):
+        super().setUp()
         self.mock_client = MagicMock()
         self.config = Config()
         self.config.dry_run = False
@@ -67,20 +69,20 @@ class TestV1_7Features(unittest.TestCase):
 
     def test_state_store_corrupted_file(self):
         """Beschädigte State Datei: Should backup and reset to empty state."""
-        path = "test_state_corrupted.json"
+        path = self.state_path
         with open(path, "w") as f:
             f.write("invalid json {")
             
         store = StateStore(path)
         self.assertEqual(store.get_cooldowns(), {})
         # check if any corrupted file exists
-        corrupted_files = [f for f in os.listdir(".") if f.startswith(f"{path}.corrupted")]
+        dir_name = os.path.dirname(path)
+        base_name = os.path.basename(path)
+        corrupted_files = [f for f in os.listdir(dir_name) if f.startswith(f"{base_name}.corrupted")]
         self.assertTrue(len(corrupted_files) > 0)
         for f in corrupted_files:
-            os.remove(f)
+            os.remove(os.path.join(dir_name, f))
         
-        if os.path.exists(path):
-            os.remove(path)
 
     def test_journal_atomic_save(self):
         """Journal schreibt temp file und macht os.replace"""
@@ -97,10 +99,7 @@ class TestV1_7Features(unittest.TestCase):
                 journal.record_cycle(1, "OK", {}, [], 1.0)
                 mock_replace.assert_called_with(path + ".tmp", path)
         finally:
-            if os.path.exists(path):
-                os.remove(path)
-            if os.path.exists(path + ".tmp"):
-                os.remove(path + ".tmp")
+            pass
 
     def test_docker_list_error(self):
         """Fehler bei Docker Container Listing: Must abort cycle, not report 0 containers."""
@@ -261,7 +260,7 @@ class TestV1_7Features(unittest.TestCase):
         self.assertEqual(store.get_cooldowns(), {})
         self.assertEqual(store.get_transactions(), {})
         
-        store.start_transaction("my_app", "id_123", "img_123")
+        store.start_transaction("my_app", "id_123", "img_123", "img_123_new")
         txs = store.get_transactions()
         self.assertIn("my_app", txs)
         self.assertEqual(txs["my_app"]["phase"], "prepared")
@@ -284,27 +283,25 @@ class TestV1_7Features(unittest.TestCase):
         cfg = config.Config()
         cfg.dry_run = False
         client = MagicMock()
-        store = StateStore("tmp_state.json")
+        store = StateStore(self.state_path)
         
         # mock store._save to fail
         store._save = MagicMock(side_effect=StateStoreError("Disk full"))
         
         # Should raise StateStoreError on start_transaction
         with self.assertRaises(StateStoreError):
-            store.start_transaction("app", "123", "img_1")
+            store.start_transaction("app", "123", "img_1", "img_1_new")
             
-        if os.path.exists("tmp_state.json"):
-            os.remove("tmp_state.json")
 
     def test_state_store_start_tx_rollback(self):
         """fehlgeschlagenes start_transaction verändert In-Memory-State nicht"""
-        if os.path.exists("tmp_start.json"): os.remove("tmp_start.json")
+        if os.path.exists(self.state_path): os.remove(self.state_path)
         from exceptions import StateStoreError
         from state_store import StateStore
-        store = StateStore("tmp_start.json")
+        store = StateStore(self.state_path)
         store._save = MagicMock(side_effect=StateStoreError("fail"))
         with self.assertRaises(StateStoreError):
-            store.start_transaction("app", "1", "2")
+            store.start_transaction("app", "1", "2", "2_new")
         self.assertNotIn("app", store.get_transactions())
 
     def test_update_transaction_keeps_previous_on_fail(self):
@@ -317,7 +314,7 @@ class TestV1_7Features(unittest.TestCase):
             from exceptions import StateStoreError
             from state_store import StateStore
             store = StateStore(path)
-            store.start_transaction("app", "orig", "img")
+            store.start_transaction("app", "orig", "img", "img_new")
             
             # mock atomarer save schlägt fehl
             original_save = store._save
@@ -331,8 +328,7 @@ class TestV1_7Features(unittest.TestCase):
             internal = store.get_transactions()
             self.assertEqual(internal["app"]["phase"], "prepared")
         finally:
-            if os.path.exists(path):
-                os.remove(path)
+            pass
 
     def test_end_transaction_keeps_transaction_on_fail(self):
         """fehlgeschlagenes end_transaction behält Transaktion"""
@@ -344,14 +340,13 @@ class TestV1_7Features(unittest.TestCase):
             from exceptions import StateStoreError
             from state_store import StateStore
             store = StateStore(path)
-            store.start_transaction("app", "1", "2")
+            store.start_transaction("app", "1", "2", "2_new")
             store._save = MagicMock(side_effect=StateStoreError("fail"))
             with self.assertRaises(StateStoreError):
                 store.end_transaction("app")
             self.assertIn("app", store.get_transactions())
         finally:
-            if os.path.exists(path):
-                os.remove(path)
+            pass
 
     def test_set_cooldowns_keeps_previous_on_fail(self):
         """fehlgeschlagenes set_cooldowns behält vorherige Cooldowns"""
@@ -368,8 +363,7 @@ class TestV1_7Features(unittest.TestCase):
                 store.set_cooldowns({"app": {"count": 1}})
             self.assertEqual(store.get_cooldowns(), {})
         finally:
-            if os.path.exists(path):
-                os.remove(path)
+            pass
 
     def test_defensive_cooldown_getter(self):
         """get_cooldowns() gibt defensive Kopie zurück"""
@@ -390,8 +384,7 @@ class TestV1_7Features(unittest.TestCase):
             self.assertEqual(internal["app"]["count"], 1)
             self.assertNotIn("new_app", internal)
         finally:
-            if os.path.exists(path):
-                os.remove(path)
+            pass
 
     def test_set_cooldowns_aliasing(self):
         """set_cooldowns() behält interne Kopie, Ändern des übergebenen dicts ändert internen Status nicht"""
@@ -413,8 +406,7 @@ class TestV1_7Features(unittest.TestCase):
             internal = store.get_cooldowns()
             self.assertEqual(internal["app"]["count"], 1)
         finally:
-            if os.path.exists(path):
-                os.remove(path)
+            pass
 
     def test_defensive_transaction_getter(self):
         """get_transactions() gibt defensive Kopie zurück"""
@@ -425,7 +417,7 @@ class TestV1_7Features(unittest.TestCase):
         try:
             from state_store import StateStore
             store = StateStore(path)
-            store.start_transaction("app", "orig", "img")
+            store.start_transaction("app", "orig", "img", "img_new")
             
             txs = store.get_transactions()
             txs["app"]["phase"] = "hacked"
@@ -435,8 +427,7 @@ class TestV1_7Features(unittest.TestCase):
             self.assertEqual(internal["app"]["phase"], "prepared")
             self.assertNotIn("new_app", internal)
         finally:
-            if os.path.exists(path):
-                os.remove(path)
+            pass
 
     def test_end_transaction_error_after_cleanup(self):
         """Fehler bei end_transaction nach erfolgreichem Cleanup löst keinen Rollback aus."""

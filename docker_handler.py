@@ -1,7 +1,6 @@
 import logging
 import re
 import socket
-from typing import List, Optional, Tuple
 
 import docker
 import docker.errors
@@ -22,7 +21,7 @@ class DockerHandler:
         self.dry_run = config.dry_run if config else False
         self.self_id = self._detect_self_id()
 
-    def _detect_self_id(self) -> Optional[str]:
+    def _detect_self_id(self) -> str | None:
         try:
             hostname = socket.gethostname()
             c = self.client.containers.get(hostname)
@@ -30,7 +29,7 @@ class DockerHandler:
         except Exception:
             return None
 
-    def get_watched_containers(self) -> Tuple[List[Container], List[Container]]:
+    def get_watched_containers(self) -> tuple[list[Container], list[Container]]:
         """Finds containers using internal config for filtering. Returns (auto_update, monitor_only)."""
         auto_update = []
         monitor_only = []
@@ -40,7 +39,7 @@ class DockerHandler:
         if self.config and self.config.exclude_regex:
             try:
                 exclude_re = re.compile(self.config.exclude_regex)
-            except:
+            except Exception:
                 logger.warning(f"Failed to compile exclude regex: {self.config.exclude_regex}")
 
         try:
@@ -77,26 +76,18 @@ class DockerHandler:
             logger.error(f"Error listing containers: {e}")
             raise
 
-    def get_image_ref(self, container: Container) -> Optional[str]:
+    def get_image_ref(self, container: Container) -> str | None:
         """
         Determines the relevant image reference for a container.
-        Prioritizes the reference used during container creation (Config.Image).
-        Returns only references that end with ':latest'.
+        Returns only the exact reference used during container creation (Config.Image) if it ends with ':latest'.
         """
-        # 1. Check Config.Image (the original ref used to create the container)
         config_image = container.attrs.get('Config', {}).get('Image', '')
         if config_image.endswith(':latest'):
             return config_image
         
-        # 2. Fallback to RepoTags if Config.Image was a SHA or didn't have :latest
-        # but the current local image object has a latest tag.
-        for t in (container.image.tags or []):
-            if t.endswith(':latest'): 
-                return t
-                
         return None
 
-    def check_for_update(self, container: Container) -> Tuple[UpdateStatus, Optional[str], Optional[str]]:
+    def check_for_update(self, container: Container) -> tuple[UpdateStatus, str | None, str | None]:
         ref = self.get_image_ref(container)
         if not ref: return UpdateStatus.FAILED, None, None
         try:
@@ -253,35 +244,53 @@ class DockerHandler:
 
         # Cleanup: Remove None values to avoid SDK issues
         create_args = {k: v for k, v in create_args.items() if v is not None}
+        
+        nets = attrs.get('NetworkSettings', {}).get('Networks') or {}
+        
+        # Abort if explicit static IP is configured
+        for net_name, net_info in nets.items():
+            ipam = net_info.get('IPAMConfig') or {}
+            if ipam.get('IPv4Address') or ipam.get('IPv6Address'):
+                raise RecreationError(f"Container {container.name} uses a static IP on network {net_name}. Static-IP recreation is unsupported and must be handled manually.")
 
         return {
             "create_args": create_args,
-            "networks": attrs.get('NetworkSettings', {}).get('Networks') or {}
+            "networks": nets
         }
 
-    def recreate(self, name: str, plan: dict, state_store=None) -> Optional[Container]:
+    def recreate(self, name: str, plan: dict, state_store=None, transaction_id: str=None) -> Container | None:
         if self.dry_run: return None
         ca = plan["create_args"].copy() # Work on a copy to allow retry modifications
+        
+        # Apply transaction ID label
+        labels = dict(ca.get("labels") or {})
+        labels.pop("watcher.transaction_id", None)
+        if transaction_id:
+            labels["watcher.transaction_id"] = transaction_id
+        ca["labels"] = labels
+        
         nets = plan["networks"]
         
         # Networking Configuration for create()
         networking_config = None
         primary_net_name = None
         
+        network_mode = str(ca.get('network_mode', ''))
+        is_special_mode = network_mode in ('host', 'none', 'default', 'bridge') or network_mode.startswith('container:')
+        
         # Defensive check for networks to avoid IndexError
-        if nets and not str(ca.get('network_mode')).startswith('container:'):
+        if nets and not is_special_mode:
             keys = list(nets.keys())
             if keys:
                 primary_net_name = keys[0]
                 n_cfg = nets[primary_net_name]
                 networking_config = self.client.api.create_networking_config({
                     primary_net_name: self.client.api.create_endpoint_config(
-                        aliases=n_cfg.get('Aliases'),
-                        ipv4_address=n_cfg.get('IPAddress') if n_cfg.get('IPAddress') else None
+                        aliases=n_cfg.get('Aliases')
                     )
                 })
-                if ca.get('network_mode') == primary_net_name:
-                    ca.pop('network_mode')
+                if network_mode == primary_net_name:
+                    ca.pop('network_mode', None)
 
         # 1. State Capture: Stop and Rename old container
         try:
@@ -311,13 +320,16 @@ class DockerHandler:
                 old.stop(timeout=timeout)
             except requests.exceptions.ReadTimeout:
                 logger.warning(f"Stop request for {name} timed out in python client. Assuming Docker daemon is still stopping it.")
-                # We can't easily wait without another timeout, so we give it a few more seconds via reload
                 import time
                 for _ in range(15):
                     old.reload()
                     if old.status != "running":
                         break
                     time.sleep(2)
+                
+                old.reload()
+                if old.status == "running":
+                    raise RecreationError(f"Container {name} failed to stop after timeout. Refusing to rename or replace it.")
             
             old.rename(backup_name)
             if state_store:
@@ -336,22 +348,29 @@ class DockerHandler:
                 logger.info(f"Creating {name} (Attempt {attempts}/{max_attempts})...")
                 new_container = self.client.containers.create(networking_config=networking_config, **ca)
                 if state_store:
-                    state_store.update_transaction(name, "replacement_created", new_container_id=new_container.id, new_image_id=new_container.image.id)
+                    try:
+                        state_store.update_transaction(name, "replacement_created", new_container_id=new_container.id, new_image_id=new_container.image.id)
+                    except Exception as state_e:
+                        logger.error(f"Failed to persist replacement_created state for {name}: {state_e}. Removing untracked new container.")
+                        try:
+                            new_container.remove(force=True)
+                        except Exception as rem_e:
+                            logger.error(f"Failed to remove untracked container {new_container.id}: {rem_e}")
+                        raise RecreationError(f"State persistence failed after container creation: {state_e}")
                 
                 # Additional networks
                 for net_name, net_config in nets.items():
-                    if net_name == primary_net_name: continue
+                    if net_name == primary_net_name or is_special_mode: continue
                     try:
                         network = self.client.networks.get(net_name)
                         network.reload()
                         if not any(c.id == new_container.id for c in network.containers):
-                            network.connect(new_container, aliases=net_config.get('Aliases'), 
-                                            ipv4_address=net_config.get('IPAddress') if net_config.get('IPAddress') else None)
+                            network.connect(new_container, aliases=net_config.get('Aliases'))
                     except Exception as net_e:
                         logger.error(f"Net-Connect error for {net_name}: {net_e}")
                         if new_container:
                             try: new_container.remove(force=True)
-                            except: pass
+                            except Exception: pass
                         raise RecreationError(f"Failed to connect secondary network {net_name}: {net_e}")
                 
                 new_container.start()

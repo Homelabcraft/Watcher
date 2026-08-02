@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 
 from exceptions import ConfigurationError
 
-load_dotenv()
+if "UNITTEST_MODE" not in os.environ:
+    load_dotenv()
 
 logger = logging.getLogger('Watcher.Config')
 

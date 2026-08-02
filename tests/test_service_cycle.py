@@ -1,30 +1,24 @@
 import os
 import unittest
+from base_test import BaseTest
 from unittest.mock import MagicMock, patch
 
 # Env setup moved to setUp
-
 from main import WatcherService
 from models import ContainerUpdateInfo, UpdateStatus
 
 
 @patch('discord_notifier.requests.post')
-class TestWatcherService(unittest.TestCase):
+class TestWatcherService(BaseTest):
     @patch('main.docker.from_env')
     def setUp(self, mock_docker):
-        self.old_env = os.environ.copy()
-        os.environ["DISCORD_WEBHOOK_URL"] = "http://mock"
-        os.environ["CHECK_INTERVAL"] = "60"
+        super().setUp()
         
         self.mock_client = MagicMock()
         mock_docker.return_value = self.mock_client
         self.service = WatcherService()
         self.service.config.health_check_retries = 1
         self.service.config.health_check_delay = 0
-
-    def tearDown(self):
-        os.environ.clear()
-        os.environ.update(self.old_env)
 
     def test_process_container_success(self, mock_post):
         mock_container = MagicMock()
@@ -62,10 +56,10 @@ class TestWatcherService(unittest.TestCase):
 
         info = self.service.process_container(mock_container, auto_update=True)        
         self.assertEqual(info.status, UpdateStatus.ROLLED_BACK)
-        self.service.perform_rollback.assert_called_once_with("test_app", "old_image_hash")
+        self.service.perform_rollback.assert_called_once_with("test_app")
 
     def test_perform_rollback_rename_failure(self, mock_post):
-        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1")
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1", "img_1_new")
         self.service.state_store.update_transaction("test_app", "replacement_verified", backup_container_id="old_image_hash", original_image_id="img_1")
         
         mock_current = MagicMock()
@@ -73,13 +67,13 @@ class TestWatcherService(unittest.TestCase):
         mock_current.image.id = "img_1"
         self.mock_client.containers.get.side_effect = [mock_current]
         
-        self.service.perform_rollback("test_app", "old_image_hash")
+        self.service.perform_rollback("test_app")
         
         mock_current.start.assert_called_once()
         mock_current.remove.assert_not_called()
 
     def test_perform_rollback_success(self, mock_post):
-        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1")
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1", "img_1_new")
         self.service.state_store.update_transaction("test_app", "replacement_verified", backup_container_id="old_image_hash", new_container_id="new_123", original_image_id="img_1")
         
         mock_current = MagicMock()
@@ -93,7 +87,7 @@ class TestWatcherService(unittest.TestCase):
         self.mock_client.containers.get.side_effect = [mock_current, mock_backup]
         self.service.health.wait_for_health = MagicMock(return_value=True)
         
-        self.service.perform_rollback("test_app", "old_image_hash")
+        self.service.perform_rollback("test_app")
         
         mock_current.remove.assert_called_once_with(force=True)
         mock_backup.rename.assert_called_once_with("test_app")

@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 import requests
 
@@ -11,7 +10,7 @@ logger = logging.getLogger("Watcher.Slack")
 class SlackNotifier:
     """Slack Incoming Webhooks (https://api.slack.com/messaging/webhooks)."""
 
-    def __init__(self, webhook_url: Optional[str]):
+    def __init__(self, webhook_url: str | None):
         self.webhook_url = webhook_url
 
     def _send(self, text: str) -> None:

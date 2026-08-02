@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
 
 logger = logging.getLogger('Watcher.Journal')
 
@@ -12,7 +12,7 @@ class Journal:
         self.enabled = enabled
         self.path = path
         self.max_entries = max_entries
-        self._history: List[Dict[str, Any]] = []
+        self._history: list[dict[str, Any]] = []
         
         if self.enabled:
             self._load()
@@ -29,7 +29,7 @@ class Journal:
                 logger.error(f"Failed to load journal (JSON Decode Error): {e}")
                 self._backup_corrupted()
                 self._history = []
-            except IOError as e:
+            except OSError as e:
                 logger.error(f"Failed to load journal (IO Error): {e}")
                 self._history = []
             except Exception as e:
@@ -61,7 +61,7 @@ class Journal:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, self.path)
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to save journal (IO Error): {e}")
             if os.path.exists(f"{self.path}.tmp"):
                 try: os.remove(f"{self.path}.tmp")
@@ -75,8 +75,8 @@ class Journal:
     def record_cycle(self, 
                      total_checked: int, 
                      run_mode: str, 
-                     summary: Dict[str, List[str]], 
-                     all_infos: List[Any], 
+                     summary: dict[str, list[str]], 
+                     all_infos: list[Any], 
                      duration_sec: float):
         """Adds a new cycle record to the history."""
         if not self.enabled:

@@ -1,9 +1,13 @@
 import logging
+import os
 import signal
 import socket
 import sys
 import threading
 import time
+import copy
+import shutil
+from exceptions import StateStoreError
 from datetime import datetime, timedelta
 
 import docker
@@ -42,9 +46,12 @@ class WatcherService:
             
         try:
             self.client = docker.from_env(timeout=120)
+            self.client.ping()
         except Exception as e:
-            logger.critical(f"Docker connection failed: {e}")
+            logger.critical(f"Docker connection failed or daemon is unavailable: {e}")
             sys.exit(1)
+            
+        self._check_single_instance()
             
         self.shutdown_event = threading.Event()
         self.docker = DockerHandler(self.client, self.config)
@@ -56,12 +63,26 @@ class WatcherService:
             self.config.journal_path, 
             max_entries=self.config.journal_max_entries
         )
-        
-        # 1.6.0 Failure tracking
         self.failure_tracker = self.state_store.get_cooldowns()
         self.abort_updates_for_cycle = False
         
         self._setup_signals()
+
+    def _check_single_instance(self):
+        """Ensures no other Watcher instance is running on the same daemon."""
+        try:
+            hostname = socket.gethostname()
+            self_c = self.client.containers.get(hostname)
+            self_id = self_c.id
+        except Exception:
+            self_id = None
+
+        for c in self.client.containers.list():
+            if c.id == self_id:
+                continue
+            if c.labels.get("watcher.self") == "true":
+                logger.critical(f"Multiple Watcher instances detected! Container {c.name} is also marked with watcher.self=true. Refusing to start.")
+                sys.exit(1)
 
     def _setup_signals(self):
         """Setup graceful shutdown on SIGINT and SIGTERM."""
@@ -100,6 +121,15 @@ class WatcherService:
         info = ContainerUpdateInfo(name=name, old_id=old_id, status=UpdateStatus.FAILED, image_ref=ref)
 
         try:
+            # Check for pending transaction
+            if name in self.state_store.get_transactions():
+                logger.warning(f"Pending transaction exists for {name}. Skipping update. Manual intervention or recovery may be required.")
+                info.status = UpdateStatus.FAILED
+                info.error_message = "Pending transaction exists"
+                info.error_step = "transaction_check"
+                self.notifier.notify_update_failure(info)
+                return info
+
             # 1. Update Detection
             info.error_step = "update_check"
             status, old_img, new_img = self.docker.check_for_update(container)
@@ -116,7 +146,6 @@ class WatcherService:
                 info.error_step = None
                 # Success/No-change clears the failure tracker
                 if name in self.failure_tracker:
-                    import copy
                     new_tracker = copy.deepcopy(self.failure_tracker)
                     del new_tracker[name]
                     self._update_cooldowns_persistently(new_tracker, name)
@@ -147,12 +176,25 @@ class WatcherService:
             container.reload()
             current_status = container.status
             plan = self.docker.get_recreation_plan(container)
+            
+            # Blocker 5: Protect container-network dependents
+            for c in self.client.containers.list():
+                if c.id == old_id: continue
+                net_mode = c.attrs.get('HostConfig', {}).get('NetworkMode', '')
+                if net_mode == f"container:{old_id}" or net_mode == f"container:{name}":
+                    msg = f"Container {c.name} shares the network of {name} (NetworkMode={net_mode}). Updating {name} would break {c.name}. Manual recreation of both containers is required."
+                    logger.error(msg)
+                    info.status = UpdateStatus.FAILED
+                    info.error_message = f"Blocked by network dependent {c.name}"
+                    info.error_step = "dependency_check"
+                    self.notifier.notify_summary("🚨 Blocked Update", msg)
+                    return info
+                    
             dependents = self.get_dependents([name], [old_id])
 
             # 3. Execution
-            from exceptions import StateStoreError
             try:
-                self.state_store.start_transaction(name, old_id, old_image_id)
+                transaction_id = self.state_store.start_transaction(name, old_id, old_image_id, new_img)
             except StateStoreError as e:
                 self.abort_updates_for_cycle = True
                 logger.error(f"StateStoreError during start_transaction for {name}: {e}")
@@ -169,7 +211,7 @@ class WatcherService:
                 self.notifier.notify_update_started(name, ref, info.old_image_short_id, info.new_image_short_id, current_status, dependents)
             
             recreate_started = True
-            new_container = self.docker.recreate(name, plan, self.state_store)
+            new_container = self.docker.recreate(name, plan, self.state_store, transaction_id=transaction_id)
             if new_container:
                 info.new_id = new_container.id
                 # status updated inside recreate
@@ -224,7 +266,6 @@ class WatcherService:
                 
                 # Success clears the failure tracker
                 if name in self.failure_tracker:
-                    import copy
                     new_tracker = copy.deepcopy(self.failure_tracker)
                     del new_tracker[name]
                     self._update_cooldowns_persistently(new_tracker, name)
@@ -238,7 +279,7 @@ class WatcherService:
                 info.rollback_attempted = True
                 
                 # Do rollback
-                rb_success, rb_detail = self.perform_rollback(name, old_image_id)
+                rb_success, rb_detail = self.perform_rollback(name)
                 info.rollback_success = rb_success
                 info.rollback_details = rb_detail
                 info.duration_sec = time.perf_counter() - start_time
@@ -253,7 +294,7 @@ class WatcherService:
             if recreate_started:
                 logger.info(f"Attempting rollback for {name} after recreation error...")
                 info.rollback_attempted = True
-                rb_success, rb_detail = self.perform_rollback(name, old_image_id)
+                rb_success, rb_detail = self.perform_rollback(name)
                 info.rollback_success = rb_success
                 info.rollback_details = rb_detail
                 
@@ -262,7 +303,6 @@ class WatcherService:
             self._record_failure(name)
             return info
         except Exception as e:
-            from exceptions import StateStoreError
             if isinstance(e, StateStoreError):
                 self.abort_updates_for_cycle = True
             logger.error(f"Error processing {name}: {e}")
@@ -271,7 +311,7 @@ class WatcherService:
             if recreate_started:
                 logger.info(f"Attempting rollback for {name} after execution error...")
                 info.rollback_attempted = True
-                rb_success, rb_detail = self.perform_rollback(name, old_image_id)
+                rb_success, rb_detail = self.perform_rollback(name)
                 info.rollback_success = rb_success
                 info.rollback_details = rb_detail
                 
@@ -282,7 +322,6 @@ class WatcherService:
 
     def _record_failure(self, name: str):
         """Internal helper to increment failure count and set cooldown."""
-        import copy
         new_tracker = copy.deepcopy(self.failure_tracker)
         tracker = new_tracker.get(name, {"count": 0, "cooldown_until": datetime.min})
         tracker["count"] += 1
@@ -296,13 +335,11 @@ class WatcherService:
             self.state_store.set_cooldowns(new_tracker)
             self.failure_tracker = new_tracker
         except Exception as e:
-            from exceptions import StateStoreError
             if isinstance(e, StateStoreError):
                 self.abort_updates_for_cycle = True
             logger.error(f"Error setting cooldowns for {name}: {e}")
 
     def _best_effort_update_tx(self, name: str, phase: str):
-        from exceptions import StateStoreError
         try:
             self.state_store.update_transaction(name, phase)
         except StateStoreError as e:
@@ -310,14 +347,13 @@ class WatcherService:
             logger.error(f"StateStoreError during rollback update ({phase}) for {name}: {e}. Continuing physical rollback.")
 
     def _best_effort_end_tx(self, name: str):
-        from exceptions import StateStoreError
         try:
             self.state_store.end_transaction(name)
         except StateStoreError as e:
             self.abort_updates_for_cycle = True
             logger.error(f"StateStoreError during rollback end_transaction for {name}: {e}. Continuing physical rollback.")
 
-    def perform_rollback(self, name: str, old_id: str) -> tuple[bool, str]:
+    def perform_rollback(self, name: str) -> tuple[bool, str]:
         """Rollback using the saved backup container."""
         logger.warning(f"ROLLBACK for {name}")
         self._best_effort_update_tx(name, "rollback_started")
@@ -518,117 +554,124 @@ class WatcherService:
                 return
 
             for name, tx in list(transactions.items()):
-                phase = tx.get("phase")
-                logger.warning(f"Found pending transaction for {name} in phase {phase}")
-                backup_name = tx.get("backup_name", f"{name}_backup")
-                orig_id = tx.get("original_container_id")
-                backup_id = tx.get("backup_container_id")
-                
-                try:
-                    backup_c = self.client.containers.get(backup_name)
-                    valid_ids = {id_ for id_ in [orig_id, backup_id] if id_}
-                    if not valid_ids:
-                        logger.error(f"Transaction for {name} has no valid container IDs. Retaining transaction.")
-                        continue
-                        
-                    if backup_c.id not in valid_ids or backup_c.image.id != tx.get("original_image_id"):
-                        logger.error(f"Backup container {backup_name} ID or Image ID mismatch! Expected ID in {valid_ids} and image {tx.get('original_image_id')}. Retaining transaction.")
-                        self.notifier.notify_summary("🚨 Recovery Error", f"Identity mismatch for {backup_name}. Aborting automatic recovery.")
-                        continue
-                except docker.errors.NotFound:
-                    logger.warning(f"Backup container {backup_name} not found.")
-                    if phase == "prepared":
-                        try:
-                            orig_c = self.client.containers.get(name)
-                            if orig_c.id == orig_id and orig_c.image.id == tx.get("original_image_id"):
-                                logger.info("Phase was prepared and main container matches original. Reloading and verifying health.")
-                                orig_c.reload()
-                                if orig_c.status != "running":
-                                    logger.info(f"Container {name} is stopped. Starting it...")
-                                    orig_c.start()
-                                    
-                                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
-                                    logger.info(f"Main container {name} is healthy. Removing transaction.")
-                                    self.state_store.end_transaction(name)
-                                else:
-                                    logger.error(f"Main container {name} failed health check. Retaining transaction.")
-                                    self.state_store.update_transaction(name, "rollback_failed")
-                            else:
-                                logger.error(f"Main container {name} does not match original IDs. Retaining transaction.")
-                        except docker.errors.NotFound:
-                            logger.error(f"Main container {name} also missing. Retaining transaction.")
-                    elif phase in ["replacement_verified", "replacement_started"]:
-                        try:
-                            orig_c = self.client.containers.get(name)
-                            if orig_c.id == tx.get("new_container_id") and orig_c.image.id == tx.get("new_image_id"):
-                                logger.info(f"Main container {name} is running as expected, but backup is missing. Assuming successful update.")
-                                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
-                                    try:
-                                        self.state_store.end_transaction(name)
-                                        logger.info(f"Transaction for {name} successfully ended after recovery.")
-                                    except Exception as e:
-                                        logger.error(f"StateStoreError while ending transaction for {name}: {e}. Retaining transaction.")
-                                        self.notifier.notify_summary("⚠️ Recovery Warning", f"Could not end transaction for {name} despite successful state.")
-                                else:
-                                    logger.error(f"Main container {name} is unhealthy, but no backup exists. Cannot rollback.")
-                            else:
-                                logger.error(f"Main container {name} IDs do not match expected new_container_id. Retaining transaction.")
-                        except docker.errors.NotFound:
-                            logger.error(f"Both main container {name} and backup missing in phase {phase}. Retaining transaction.")
-                    else:
-                        logger.error(f"Backup missing for {name} in phase {phase}. Cannot rollback. Retaining transaction.")
-                    continue
-
-                try:
-                    orig_c = self.client.containers.get(name)
-                    if phase in ["prepared", "backup_renamed"]:
-                        new_container_id = tx.get("new_container_id")
-                        if not new_container_id or orig_c.id != new_container_id:
-                            logger.error(f"Main container {name} exists but no valid new_container_id is recorded in phase {phase}. Retaining transaction.")
-                            self.notifier.notify_summary("🚨 Recovery Error", f"Unexpected main container {name} found during {phase}. Aborting automatic recovery.")
-                            continue
-                            
-                        logger.warning(f"Restoring {name} from {backup_name}...")
-                        orig_c.remove(force=True)
-                        backup_c.rename(name)
-                        backup_c.start()
-                    else:
-                        # replacement_created or later
-                        new_container_id = tx.get("new_container_id")
-                        if not new_container_id or orig_c.id != new_container_id:
-                            logger.error(f"Main container {name} ID mismatch in phase {phase}! Expected {new_container_id}, got {orig_c.id}. Retaining transaction.")
-                            self.notifier.notify_summary("🚨 Recovery Error", f"Identity mismatch for {name}. Aborting automatic recovery.")
-                            continue
-                            
-                        if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
-                            logger.info(f"New container {name} is healthy. Removing backup.")
-                            if self.docker.remove_backup(name):
-                                self.state_store.end_transaction(name)
-                            else:
-                                logger.error(f"Failed to remove backup {name}_backup after successful recovery. Retaining transaction in phase replacement_verified.")
-                                self.state_store.update_transaction(name, "replacement_verified")
-                                self.notifier.notify_summary("⚠️ Recovery Warning", f"Container {name} recovered, but backup cleanup failed.")
-                            continue
-                        else:
-                            logger.warning(f"New container {name} is not healthy. Rolling back...")
-                            orig_c.remove(force=True)
-                            backup_c.rename(name)
-                            backup_c.start()
-                except docker.errors.NotFound:
-                    logger.warning(f"Main container {name} missing. Restoring from backup.")
-                    backup_c.rename(name)
-                    backup_c.start()
-
-                # Verify health after rollback
-                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
-                    logger.info(f"Recovered container {name} is healthy. Removing transaction.")
-                    self.state_store.end_transaction(name)
-                else:
-                    logger.error(f"Recovered container {name} failed health check. Retaining transaction.")
-                    self.state_store.update_transaction(name, "rollback_failed")
-
+                self._process_single_recovery(name, tx)
         except Exception as e:
             logger.error(f"Error during startup recovery: {e}")
+
+    def _process_single_recovery(self, name: str, tx: dict):
+        try:
+            phase = tx.get("phase")
+            transaction_id = tx.get("transaction_id")
+            logger.warning(f"Found pending transaction for {name} in phase {phase}")
+            
+            orig_id = tx.get("original_container_id")
+            orig_image_id = tx.get("original_image_id")
+            backup_name = tx.get("backup_name", f"{name}_backup")
+            new_container_id = tx.get("new_container_id")
+            new_image_id = tx.get("new_image_id")
+            planned_new_image_id = tx.get("planned_new_image_id")
+            
+            # Identify main container
+            main_c = None
+            try:
+                main_c = self.client.containers.get(name)
+            except docker.errors.NotFound:
+                pass
+
+            # Identify backup container
+            backup_c = None
+            try:
+                backup_c = self.client.containers.get(backup_name)
+                # Verify backup identity
+                if backup_c.image.id != orig_image_id or (orig_id and backup_c.id != orig_id):
+                    logger.error(f"Backup container {backup_name} identity mismatch. Discarding backup reference.")
+                    backup_c = None
+            except docker.errors.NotFound:
+                pass
+                
+            # If main container matches exact new container plan but we lack new_container_id (crash during create)
+            if main_c and not new_container_id and planned_new_image_id:
+                if main_c.image.id == planned_new_image_id and main_c.labels.get("watcher.transaction_id") == transaction_id:
+                    logger.info(f"Discovered unpersisted replacement container for {name}.")
+                    new_container_id = main_c.id
+                    new_image_id = main_c.image.id
+                    self.state_store.update_transaction(name, "replacement_created", new_container_id=new_container_id, new_image_id=new_image_id)
+
+            # Condition A: Main container matches original
+            if main_c and main_c.id == orig_id and main_c.image.id == orig_image_id:
+                logger.info(f"Main container {name} matches original identity.")
+                if backup_c:
+                    logger.warning(f"Both original main and backup exist for {name}. Removing redundant backup.")
+                    backup_c.remove(force=True)
+                
+                main_c.reload()
+                if main_c.status != "running":
+                    logger.info(f"Starting stopped original container {name}...")
+                    main_c.start()
+                    
+                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                    logger.info(f"Original container {name} is healthy. Ending transaction.")
+                    self.state_store.end_transaction(name)
+                else:
+                    logger.error(f"Original container {name} failed health check. Retaining transaction.")
+                    self.state_store.update_transaction(name, "rollback_failed")
+                return
+
+            # Condition B: Main container matches new container exactly
+            if main_c and new_container_id and main_c.id == new_container_id and main_c.image.id == new_image_id and main_c.labels.get("watcher.transaction_id") == transaction_id:
+                logger.info(f"Main container {name} matches new replacement identity.")
+                main_c.reload()
+                if main_c.status != "running":
+                    main_c.start()
+                    
+                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                    logger.info(f"New container {name} is healthy.")
+                    if backup_c:
+                        logger.info(f"Removing backup {backup_name}.")
+                        backup_c.remove(force=True)
+                    self.state_store.end_transaction(name)
+                else:
+                    logger.warning(f"New container {name} is unhealthy. Rolling back...")
+                    main_c.remove(force=True)
+                    if backup_c:
+                        backup_c.rename(name)
+                        backup_c.start()
+                        if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                            logger.info(f"Rollback successful for {name}.")
+                            self.state_store.end_transaction(name)
+                        else:
+                            logger.error(f"Recovered container {name} unhealthy.")
+                            self.state_store.update_transaction(name, "rollback_failed")
+                    else:
+                        logger.error(f"No backup available for {name} rollback.")
+                        self.state_store.update_transaction(name, "rollback_failed")
+                return
+                
+            # Condition C: Backup exists and matches original, main is missing or invalid
+            if backup_c:
+                if main_c:
+                    logger.error(f"Valid backup exists for {name}, but an unknown container occupies the main name. Aborting automatic recovery.")
+                    self.notifier.notify_summary("🚨 Recovery Error", f"Unknown main container {name} prevents rollback. Manual intervention required.")
+                    return
+                    
+                logger.info(f"Valid backup exists for {name}. Main is missing. Restoring backup.")
+                backup_c.rename(name)
+                backup_c.start()
+                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                    logger.info(f"Rollback successful for {name}.")
+                    self.state_store.end_transaction(name)
+                else:
+                    logger.error(f"Recovered container {name} unhealthy.")
+                    self.state_store.update_transaction(name, "rollback_failed")
+                return
+
+            # Condition D: Neither valid main nor valid backup exists
+            logger.error(f"CRITICAL: Neither valid main nor valid backup exists for {name}. Transaction unrecoverable.")
+            self.notifier.notify_summary("🚨 Recovery Failed", f"Container {name} is completely missing. Manual intervention required.")
+            self.state_store.update_transaction(name, "rollback_failed")
+            
+        except Exception as e:
+            logger.error(f"Error processing recovery for {name}: {e}")
 
     def run_cycle(self):
         self.abort_updates_for_cycle = False
@@ -720,7 +763,7 @@ class WatcherService:
         self.journal.record_cycle(total_checked, "LIVE", summary, all_infos, cycle_duration)
         
         # Apply Notification Strategy
-        # Decision for 1.6.0: 'on_change' only triggers if an ACTION occurred (Update, Fail, Rollback).
+        # 'on_change' only triggers if an ACTION occurred (Update, Fail, Rollback).
         # Pure 'reported' (monitor-only updates) do NOT trigger a summary if strategy is 'on_change'.
         should_notify = True
         strategy = self.config.notify_summary_strategy

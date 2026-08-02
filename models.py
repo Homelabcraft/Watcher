@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import List, Optional
 
 
 class UpdateStatus(Enum):
@@ -17,22 +16,21 @@ class ContainerUpdateInfo:
     name: str
     old_id: str
     status: UpdateStatus
-    error_message: Optional[str] = None
-    error_step: Optional[str] = None
-    old_image_short_id: Optional[str] = None
-    new_image_short_id: Optional[str] = None
-    image_ref: Optional[str] = None
-    new_id: Optional[str] = None
+    error_message: str | None = None
+    error_step: str | None = None
+    old_image_short_id: str | None = None
+    new_image_short_id: str | None = None
+    image_ref: str | None = None
+    new_id: str | None = None
     duration_sec: float = 0.0
     rollback_attempted: bool = False
     rollback_success: bool = False
-    rollback_details: Optional[str] = None
-    container_running_post_error: bool = False
+    rollback_details: str | None = None
 
 @dataclass
 class ExecutionPlan:
     checked_containers: int = 0
-    updates_available: List[ContainerUpdateInfo] = field(default_factory=list)
-    monitored_only: List[ContainerUpdateInfo] = field(default_factory=list)
-    dependents_to_restart: List[str] = field(default_factory=list)
+    updates_available: list[ContainerUpdateInfo] = field(default_factory=list)
+    monitored_only: list[ContainerUpdateInfo] = field(default_factory=list)
+    dependents_to_restart: list[str] = field(default_factory=list)
 

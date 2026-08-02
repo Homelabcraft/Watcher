@@ -1,4 +1,5 @@
 import unittest
+from base_test import BaseTest
 from unittest.mock import MagicMock, patch
 
 import docker
@@ -7,8 +8,9 @@ from docker_handler import DockerHandler
 from main import WatcherService
 
 
-class TestRollback(unittest.TestCase):
+class TestRollback(BaseTest):
     def setUp(self):
+        super().setUp()
         self.mock_client = MagicMock()
         self.config = MagicMock()
         self.config.allow_user_fallback = True
@@ -55,7 +57,6 @@ class TestRollback(unittest.TestCase):
                 self.fail("recreate() raised IndexError unexpectedly!")
             # Other errors are expected because we use mocks incorrectly here, 
             # but we only care about IndexError.
-            pass
 
     def test_rollback_defensive_flow(self):
         """Verify that rollback handles missing current container and missing backup gracefully."""
@@ -63,7 +64,7 @@ class TestRollback(unittest.TestCase):
         
         # This should NOT raise IndexError
         try:
-            self.service.perform_rollback("test", "old_id")
+            self.service.perform_rollback("test")
         except Exception as e:
             self.fail(f"perform_rollback() raised {type(e).__name__} unexpectedly: {e}")
 

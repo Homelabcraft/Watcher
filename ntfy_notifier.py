@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 import requests
 
@@ -11,7 +10,7 @@ logger = logging.getLogger("Watcher.Ntfy")
 class NtfyNotifier:
     """Publish to an ntfy topic (https://ntfy.sh or self-hosted). Set NTFY_URL to the full topic URL."""
 
-    def __init__(self, topic_url: Optional[str]):
+    def __init__(self, topic_url: str | None):
         self.topic_url = topic_url
 
     def _send(self, title: str, body: str, tags: list[str] = None) -> None:
