@@ -65,7 +65,17 @@ class TestWatcherService(BaseTest):
         mock_current = MagicMock()
         mock_current.id = "old_image_hash"
         mock_current.image.id = "img_1"
-        self.mock_client.containers.get.side_effect = [mock_current]
+        def mock_get(n):
+            import docker
+            if n == "test_app_backup":
+                b = MagicMock()
+                b.id = "old_image_hash"
+                b.image.id = "img_1"
+                b.rename.side_effect = Exception("Rename failed")
+                return b
+            if n == "test_app": raise docker.errors.NotFound("Not found")
+            raise Exception("NotFound")
+        self.mock_client.containers.get.side_effect = mock_get
 
         self.service.perform_rollback("test_app")
 
@@ -84,7 +94,11 @@ class TestWatcherService(BaseTest):
         mock_backup.id = "old_image_hash"
         mock_backup.image.id = "img_1"
 
-        self.mock_client.containers.get.side_effect = [mock_current, mock_backup]
+        def mock_get(n):
+            if n == "test_app": return mock_current
+            if n == "test_app_backup": return mock_backup
+            raise Exception("NotFound")
+        self.mock_client.containers.get.side_effect = mock_get
         self.service.health.wait_for_health = MagicMock(return_value=True)
 
         self.service.perform_rollback("test_app")

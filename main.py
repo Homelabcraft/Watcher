@@ -366,6 +366,31 @@ class WatcherService:
 
             # 1. Inspect current container under target name
             backup_name = f"{name}_backup"
+            
+            # 1. Validate backup before touching replacement
+            backup = None
+            try:
+                backup = self.client.containers.get(backup_name)
+                valid_backup_ids = {id_ for id_ in [original_container_id, backup_container_id] if id_}
+                if not valid_backup_ids or backup.id not in valid_backup_ids or backup.image.id != original_image_id:
+                    logger.error(f"Backup container {backup_name} identity mismatch! Refusing to restore.")
+                    msg = "Rollback failed: Backup identity mismatch."
+                    self.notifier.notify_rollback(name, "failed", msg)
+                    self._best_effort_update_tx(name, 'rollback_failed')
+                    return False, msg
+            except docker.errors.NotFound:
+                logger.error(f"Backup {backup_name} not found. Rollback impossible.")
+                msg = "Rollback failed: Backup container not found."
+                self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
+                return False, msg
+            except Exception as e:
+                logger.error(f"Error accessing backup {backup_name}: {e}")
+                msg = f"Rollback failed: {e}"
+                self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
+                return False, msg
+
             try:
                 current_container = self.client.containers.get(name)
                 if not new_container_id and tx.get("planned_new_image_id"):
@@ -411,15 +436,7 @@ class WatcherService:
 
             # 2. Restore backup
             try:
-                backup = self.client.containers.get(backup_name)
-
-                valid_backup_ids = {id_ for id_ in [original_container_id, backup_container_id] if id_}
-                if not valid_backup_ids or backup.id not in valid_backup_ids or backup.image.id != original_image_id:
-                    logger.error(f"Backup container {backup_name} identity mismatch! Refusing to restore.")
-                    msg = "Rollback failed: Backup identity mismatch."
-                    self.notifier.notify_rollback(name, "failed", msg)
-                    self._best_effort_update_tx(name, 'rollback_failed')
-                    return False, msg
+                # backup is already fetched and validated
 
                 logger.info(f"Found backup {backup_name}. Restoring...")
 
@@ -608,21 +625,30 @@ class WatcherService:
             # Condition A: Main container matches original
             if main_c and main_c.id == orig_id and main_c.image.id == orig_image_id:
                 logger.info(f"Main container {name} matches original identity.")
-                if backup_c:
-                    logger.warning(f"Both original main and backup exist for {name}. Removing redundant backup.")
-                    backup_c.remove(force=True)
-
-                main_c.reload()
-                if main_c.status != "running":
-                    logger.info(f"Starting stopped original container {name}...")
-                    main_c.start()
-
+                
+                logger.info(f"Original {name} is untouched. Verifying health before cleanup.")
+                try:
+                    main_c.reload()
+                    if main_c.status != "running":
+                        logger.info(f"Starting stopped original container {name}...")
+                        main_c.start()
+                except Exception as e:
+                    logger.error(f"Failed to start original container {name}: {e}")
+                    return
+                
                 if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                    if backup_c:
+                        logger.warning(f"Both original main and backup exist for {name}. Removing redundant backup.")
+                        try:
+                            backup_c.remove(force=True)
+                        except Exception as e:
+                            logger.error(f"Failed to remove redundant backup: {e}")
+                            return
                     logger.info(f"Original container {name} is healthy. Ending transaction.")
                     self.state_store.end_transaction(name)
                 else:
-                    logger.error(f"Original container {name} failed health check. Retaining transaction.")
-                    self.state_store.update_transaction(name, "rollback_failed")
+                    logger.error(f"Original container {name} failed health check. Retaining backup and transaction.")
+                    self._best_effort_update_tx(name, "rollback_failed")
                 return
 
             # Condition B: Main container matches new container exactly
