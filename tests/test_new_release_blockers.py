@@ -183,15 +183,23 @@ class TestNewFeatures(BaseTest):
         c = MagicMock()
         c.id = "target_123"
         c.name = "target"
+        c.status = "running"
+        c.image.id = "old_image"
+        c.image.tags = ["nginx:latest"]
+        c.labels = {"watcher.self": "false"}
 
         dep = MagicMock()
         dep.name = "dependent"
         dep.attrs = {"HostConfig": {"NetworkMode": "container:target_123"}}
         self.mock_client.containers.list.return_value = [c, dep]
+        
+        from models import UpdateStatus
+        self.service.docker.get_recreation_plan = MagicMock(return_value=MagicMock())
+        self.service.docker.check_updates = MagicMock(return_value=(True, "old_image", "new_img_456"))
 
-        with self.assertRaises(RecreationError) as e:
-            self.service.docker.check_container_network_dependents(c)
-        self.assertIn("dependent", str(e.exception))
+        info = self.service.process_container(c, True)
+        self.assertEqual(info.status, UpdateStatus.FAILED)
+        self.assertEqual(info.error_step, "dependency_check")
 
     # 6. Stop timeout
     @patch('time.sleep', return_value=None)
@@ -292,3 +300,223 @@ class TestNewFeatures(BaseTest):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_persisted_replacement_missing_backup_not_removed(self):
+        self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
+        self.service.state_store.update_transaction("app", "replacement_created", new_container_id="new_456", new_image_id="img_2")
+        
+        mock_current = MagicMock()
+        mock_current.id = "new_456"
+        mock_current.image.id = "img_2"
+        
+        def mock_get(name):
+            if name == "app": return mock_current
+            if name == "app_backup": raise docker.errors.NotFound("No backup")
+            raise docker.errors.NotFound(name)
+            
+        self.mock_client.containers.get.side_effect = mock_get
+        
+        success, _ = self.service.perform_rollback("app")
+        self.assertFalse(success)
+        mock_current.remove.assert_not_called()
+
+    def test_persisted_replacement_wrong_backup_id_not_removed(self):
+        self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
+        self.service.state_store.update_transaction("app", "replacement_created", new_container_id="new_456", new_image_id="img_2")
+        
+        mock_current = MagicMock()
+        mock_current.id = "new_456"
+        mock_current.image.id = "img_2"
+        
+        mock_backup = MagicMock()
+        mock_backup.id = "wrong_123"
+        mock_backup.image.id = "img_1"
+        
+        def mock_get(name):
+            if name == "app": return mock_current
+            if name == "app_backup": return mock_backup
+            raise docker.errors.NotFound(name)
+            
+        self.mock_client.containers.get.side_effect = mock_get
+        
+        success, _ = self.service.perform_rollback("app")
+        self.assertFalse(success)
+        mock_current.remove.assert_not_called()
+        
+    def test_persisted_replacement_wrong_backup_image_not_removed(self):
+        self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
+        self.service.state_store.update_transaction("app", "replacement_created", new_container_id="new_456", new_image_id="img_2")
+        
+        mock_current = MagicMock()
+        mock_current.id = "new_456"
+        mock_current.image.id = "img_2"
+        
+        mock_backup = MagicMock()
+        mock_backup.id = "orig_123"
+        mock_backup.image.id = "wrong_img"
+        
+        def mock_get(name):
+            if name == "app": return mock_current
+            if name == "app_backup": return mock_backup
+            raise docker.errors.NotFound(name)
+            
+        self.mock_client.containers.get.side_effect = mock_get
+        
+        success, _ = self.service.perform_rollback("app")
+        self.assertFalse(success)
+        mock_current.remove.assert_not_called()
+
+    def test_unpersisted_replacement_correct_label_missing_backup_not_removed(self):
+        self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
+        tx_id = next(iter(self.service.state_store.get_transactions().values()))["transaction_id"]
+        
+        mock_current = MagicMock()
+        mock_current.id = "unpersisted_456"
+        mock_current.image.id = "img_2"
+        mock_current.labels = {"watcher.transaction_id": tx_id}
+        
+        def mock_get(name):
+            if name == "app": return mock_current
+            if name == "app_backup": raise docker.errors.NotFound("No backup")
+            raise docker.errors.NotFound(name)
+            
+        self.mock_client.containers.get.side_effect = mock_get
+        
+        success, _ = self.service.perform_rollback("app")
+        self.assertFalse(success)
+        mock_current.remove.assert_not_called()
+
+    def test_valid_replacement_valid_backup_removes_replacement_restores_backup(self):
+        self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
+        self.service.state_store.update_transaction("app", "replacement_created", new_container_id="new_456", new_image_id="img_2")
+        
+        mock_current = MagicMock()
+        mock_current.id = "new_456"
+        mock_current.image.id = "img_2"
+        
+        mock_backup = MagicMock()
+        mock_backup.id = "orig_123"
+        mock_backup.image.id = "img_1"
+        
+        def mock_get(name):
+            if name == "app": return mock_current
+            if name == "app_backup": return mock_backup
+            raise docker.errors.NotFound(name)
+            
+        self.mock_client.containers.get.side_effect = mock_get
+        self.service.health.wait_for_health.return_value = True
+        
+        success, _ = self.service.perform_rollback("app")
+        self.assertTrue(success)
+        mock_current.remove.assert_called_once_with(force=True)
+        mock_backup.rename.assert_called_once_with("app")
+        mock_backup.start.assert_called_once()
+        # Ensure backup fetch is not repeated
+        self.assertEqual(self.mock_client.containers.get.call_count, 2) # Once for backup, once for main
+
+    def test_unhealthy_original_leaves_backup_untouched(self):
+        self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
+        tx = self.service.state_store.get_transactions()["app"]
+        
+        mock_main = MagicMock()
+        mock_main.id = "orig_123"
+        mock_main.image.id = "img_1"
+        mock_main.status = "running"
+        
+        mock_backup = MagicMock()
+        
+        def mock_get(name):
+            if name == "app": return mock_main
+            if name == "app_backup": return mock_backup
+            raise docker.errors.NotFound(name)
+            
+        self.mock_client.containers.get.side_effect = mock_get
+        self.service.health.wait_for_health.return_value = False # Unhealthy
+        
+        self.service._process_single_recovery("app", tx)
+        
+        mock_backup.remove.assert_not_called()
+        self.assertEqual(self.service.state_store.get_transactions()["app"]["phase"], "rollback_failed")
+
+    def test_healthy_original_removes_redundant_backup(self):
+        self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
+        tx = self.service.state_store.get_transactions()["app"]
+        
+        mock_main = MagicMock()
+        mock_main.id = "orig_123"
+        mock_main.image.id = "img_1"
+        mock_main.status = "running"
+        
+        mock_backup = MagicMock()
+        
+        def mock_get(name):
+            if name == "app": return mock_main
+            if name == "app_backup": return mock_backup
+            raise docker.errors.NotFound(name)
+            
+        self.mock_client.containers.get.side_effect = mock_get
+        self.service.health.wait_for_health.return_value = True # Healthy
+        
+        self.service._process_single_recovery("app", tx)
+        
+        mock_backup.remove.assert_called_once_with(force=True)
+        self.assertNotIn("app", self.service.state_store.get_transactions())
+
+    def test_backup_cleanup_failure_retains_transaction(self):
+        self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
+        tx = self.service.state_store.get_transactions()["app"]
+        
+        mock_main = MagicMock()
+        mock_main.id = "orig_123"
+        mock_main.image.id = "img_1"
+        mock_main.status = "running"
+        
+        mock_backup = MagicMock()
+        mock_backup.remove.side_effect = Exception("Cleanup failed")
+        
+        def mock_get(name):
+            if name == "app": return mock_main
+            if name == "app_backup": return mock_backup
+            raise docker.errors.NotFound(name)
+            
+        self.mock_client.containers.get.side_effect = mock_get
+        self.service.health.wait_for_health.return_value = True # Healthy
+        
+        self.service._process_single_recovery("app", tx)
+        
+        mock_backup.remove.assert_called_once_with(force=True)
+        self.assertIn("app", self.service.state_store.get_transactions())
+
+    def test_end_transaction_failure_does_not_trigger_container_deletion(self):
+        self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
+        tx = self.service.state_store.get_transactions()["app"]
+        
+        mock_main = MagicMock()
+        mock_main.id = "orig_123"
+        mock_main.image.id = "img_1"
+        mock_main.status = "running"
+        
+        def mock_get(name):
+            if name == "app": return mock_main
+            raise docker.errors.NotFound(name)
+            
+        self.mock_client.containers.get.side_effect = mock_get
+        self.service.health.wait_for_health.return_value = True # Healthy
+        
+        with patch.object(self.service.state_store, 'end_transaction', side_effect=Exception("DB Error")):
+            try:
+                self.service._process_single_recovery("app", tx)
+            except Exception:  # noqa: BLE001, S110
+                pass
+            
+        mock_main.remove.assert_not_called()
+        self.assertIn("app", self.service.state_store.get_transactions())
+
+    def test_single_instance_labels_none_does_not_crash(self):
+        mock_container = MagicMock()
+        mock_container.id = "other_456"
+        mock_container.labels = None
+        self.mock_client.containers.list.return_value = [mock_container]
+        
+        with patch.object(self.service.docker, '_detect_self_id', return_value="me_123"):
+            self.service._check_single_instance()

@@ -1,12 +1,10 @@
 import logging  # noqa: I001
-import os  # noqa: F401
 import signal
 import socket
 import sys
 import threading
 import time
 import copy
-import shutil  # noqa: F401
 from exceptions import StateStoreError
 from datetime import datetime, timedelta
 
@@ -80,7 +78,8 @@ class WatcherService:
         for c in self.client.containers.list():
             if c.id == self_id:
                 continue
-            if c.labels.get("watcher.self") == "true":
+            labels = c.labels or {}
+            if labels.get("watcher.self") == "true":
                 logger.critical(f"Multiple Watcher instances detected! Container {c.name} is also marked with watcher.self=true. Refusing to start.")
                 sys.exit(1)
 

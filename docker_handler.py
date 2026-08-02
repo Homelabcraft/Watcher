@@ -259,14 +259,6 @@ class DockerHandler:
         }
 
 
-    def check_container_network_dependents(self, target: Container):
-        target_mode = f"container:{target.id}"
-        dependents = []
-        for c in self.client.containers.list():
-            if c.attrs.get("HostConfig", {}).get("NetworkMode") == target_mode:
-                dependents.append(c.name)
-        if dependents:
-            raise RecreationError(f"Update refused: dependent containers {dependents} share network namespace. They must be recreated manually.")
 
     def recreate(self, name: str, plan: dict, state_store=None, transaction_id: str=None) -> Container | None:  # noqa: RUF013
         if self.dry_run: return None
