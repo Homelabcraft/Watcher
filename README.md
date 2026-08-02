@@ -14,11 +14,11 @@
 While tools like Watchtower are great for blindly pulling and restarting containers, they often leave you in the dark when an update breaks your application. **Watcher is different.**
 
 *   **Container Lifecycle:** Watcher stops your working container, renames it, and keeps it as a backup before creating a replacement.
-*   **Health Validation:** It verifies the health of the newly pulled container. If it crashes or reports unhealthy, Watcher instantly restores the backup.
+*   **Health Validation:** It verifies the health of the newly pulled container. If it crashes or reports unhealthy, Watcher performs a container rollback to restore the backup.
 *   **Rich Notifications:** Instead of generic "Update applied" logs, Watcher sends comprehensive, color-coded execution plans, version shifts (image hashes), and detailed rollback reports to **Discord, Slack, Telegram, or Ntfy**.
 *   **Local Journaling:** Watcher maintains a persistent local JSON history of every scan cycle and update result for auditing and troubleshooting.
 *   **Intelligent Cooldown:** Avoids "retry loops" by automatically placing failing containers into a cooldown period.
-*   **Total Control:** Granular opt-in/opt-out labeling, deep dependency restarts, regex-based exclusions, and robust dry-runs ensure you always know exactly what will happen.
+*   **Total Control:** Granular opt-in/opt-out labeling, direct dependency restart, regex-based exclusions, and robust dry-runs ensure you always know exactly what will happen.
 
 ---
 
@@ -58,7 +58,7 @@ services:
     image: my-app:latest
     labels:
       - "watcher.enable=true"  # Auto-update: Full lifecycle management.
-      - "watcher.depends_on=database" # Restarts the database if web-app is updated.
+      - "watcher.depends_on=database" # Restarts web-app if database is updated.
 ```
 
 ---
@@ -145,3 +145,14 @@ Please refer to the [Testing Guide](docs/testing.md) for automated unit testing 
 
 ## 📄 License & Compliance
 This project is licensed under the **MIT License**. It is designed for use in homelab environments where reliability is the primary metric of success.
+
+---
+
+## ?? Known Limitations & Behavior
+
+* **Ignored Tags:** Fixed tags and digests are ignored. Watcher exclusively operates on :latest tags.
+* **Image Caching:** Monitor-only checks and dry-run checks still pull :latest into the Docker image cache to accurately compare image digests. This means a later manual recreation of a container may use the newly pulled image inadvertently.
+* **Health Validation:** Containers without Docker healthchecks are only checked for a running state. Application/API health is not verified automatically unless natively configured via Docker HEALTHCHECK.
+* **Static IPs:** Explicit static IP containers are blocked in v1.7. Watcher will safely refuse to recreate containers with explicitly configured static IPs to prevent networking conflicts.
+* **Dependent Network Namespaces:** container:<id> dependents block target updates. If a running container shares the target's network namespace (e.g., VPN setups), Watcher refuses the update because recreating the target would break the dependent container's networking.
+* **Data Rollbacks:** Database/schema migrations cannot be rolled back. Watcher performs a container rollback, not a data rollback.

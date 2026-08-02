@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 - **Crash Recovery & Startup Reconciliation (`startup_recovery()`):** Watcher now automatically detects orphaned `_backup` containers on startup resulting from unexpected host reboots or power loss during an active update. It automatically reconciles the state by checking health and safely recovering the primary or backup container.
 - **Robust Persistence & Atomicity:** Both `state.json` and `journal.json` are now written using atomic temporary files (`os.replace`) with aggressive disk syncing (`f.flush()`, `os.fsync()`) to prevent JSON corruption during power loss. Added automatic detection and backup of corrupted state files.
-- **Enhanced Container Replication:** Drastically improved bit-perfect container recreation. Added support for complex mounts (including `tmpfs`), complex device mappings, DNS configurations (`dns`, `dns_search`, `dns_opt`), capabilities (`cap_add`, `cap_drop`), CPU/Memory limits, PID modes, and custom healthcheck start periods (`StartPeriod`).
+- **Enhanced Container Replication:** Drastically improved close configuration parity. Added support for complex mounts (including `tmpfs`), complex device mappings, DNS configurations (`dns`, `dns_search`, `dns_opt`), capabilities (`cap_add`, `cap_drop`), CPU/Memory limits, PID modes, and custom healthcheck start periods (`StartPeriod`).
 - **Data Persistence Strategy:** Re-architected storage paths. All operational data (journal, state) is now saved to an explicitly declared `data/` volume mount point, ensuring persistence across Watcher container updates.
 - **Fault-Tolerant Multi-Notifier:** The `MultiNotifier` component now strictly isolates failures. If one configured messaging backend (e.g., Ntfy) goes down, it will no longer block or crash the delivery of notifications to other functional backends (e.g., Telegram).
 - **Telegram Notification Hardening:** Implemented strict HTML entity escaping for Telegram messages to prevent parsing errors when container names, image tags, or error messages contain sensitive characters (`<`, `>`, `&`).
@@ -99,7 +99,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - Refactored `WatcherService` for better stability and explicit error handling.
-- Optimized Docker recreation plan logic to ensure bit-perfect replicas.
+- Optimized Docker recreation plan logic to ensure close configuration parity.
 
 ## [1.3.2] - 2026-04-03
 ### Changed
