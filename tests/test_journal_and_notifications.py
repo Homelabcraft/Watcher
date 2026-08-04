@@ -102,6 +102,7 @@ class TestJournalAndNotifications(BaseTest):
         """Journal must write cycle outcomes cleanly"""
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
             path = f.name
             
         try:
@@ -191,6 +192,7 @@ class TestJournalAndNotifications(BaseTest):
         import tempfile
 
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
             path = f.name
             
         try:

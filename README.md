@@ -52,7 +52,7 @@ services:
   database:
     image: postgres:latest
     labels:
-      - "watcher.enable=false" # Monitor only: Receive alerts if updates exist, but don't auto-update.
+      - "watcher.enable=true" # Monitor only: Receive alerts if updates exist, but don't auto-update.
 
   web-app:
     image: my-app:latest

@@ -35,7 +35,10 @@ class StateStore:
                         for v in data["cooldowns"].values():
                             if "cooldown_until" in v and isinstance(v["cooldown_until"], str):
                                 try:
-                                    v["cooldown_until"] = datetime.fromisoformat(v["cooldown_until"])
+                                    dt = datetime.fromisoformat(v["cooldown_until"])
+                                    if dt.tzinfo is None:
+                                        dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo).astimezone(timezone.utc)
+                                    v["cooldown_until"] = dt
                                 except ValueError:
                                     v["cooldown_until"] = datetime.min.replace(tzinfo=timezone.utc)
                         self._data = data

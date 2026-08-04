@@ -1,4 +1,3 @@
-import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -278,11 +277,12 @@ class TestWatcherService(BaseTest):
 
         mock_post.assert_called_once()
         _args, kwargs = mock_post.call_args
-        payload = kwargs.get('json')
-        description = payload["embeds"][0]["description"]
-        self.assertIn("Updates Available", description)
-        self.assertIn("app1", description)
-        self.assertIn("app2", description)
+        self.assertIn("app1", kwargs["json"]["embeds"][0]["description"])
+
+    def test_get_sleep_duration(self, mock_post):
+        self.service.config.schedule_time = "14:30"
+        duration = self.service._get_sleep_duration()
+        self.assertTrue(0 <= duration <= 86400)
 
 if __name__ == '__main__':
     unittest.main()

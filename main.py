@@ -548,14 +548,14 @@ class WatcherService:
         if not self.config.schedule_time:
             return float(self.config.check_interval)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now().astimezone()
         try:
             target_time = datetime.strptime(self.config.schedule_time, "%H:%M").replace(tzinfo=timezone.utc).time()
         except ValueError:
             logger.error(f"Invalid SCHEDULE_TIME: {self.config.schedule_time}. Falling back to 24h interval.")
             return 86400.0
 
-        target_dt = datetime.combine(now.date(), target_time)
+        target_dt = datetime.combine(now.date(), target_time).replace(tzinfo=now.tzinfo)
 
         if now >= target_dt:
             target_dt += timedelta(days=1)

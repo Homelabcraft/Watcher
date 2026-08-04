@@ -88,6 +88,7 @@ class TestStateStoreAndFeatures(BaseTest):
         """Journal schreibt temp file und macht os.replace"""
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
             path = f.name
 
         try:
@@ -309,6 +310,7 @@ class TestStateStoreAndFeatures(BaseTest):
         """fehlgeschlagenes update_transaction behält vorherige Phase"""
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
             path = f.name
 
         try:
@@ -335,6 +337,7 @@ class TestStateStoreAndFeatures(BaseTest):
         """fehlgeschlagenes end_transaction behält Transaktion"""
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
             path = f.name
 
         try:
@@ -354,6 +357,7 @@ class TestStateStoreAndFeatures(BaseTest):
         """fehlgeschlagenes set_cooldowns behält vorherige Cooldowns"""
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
             path = f.name
 
         try:
@@ -372,6 +376,7 @@ class TestStateStoreAndFeatures(BaseTest):
         """get_cooldowns() gibt defensive Kopie zurück"""
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
             path = f.name
 
         try:
@@ -394,6 +399,7 @@ class TestStateStoreAndFeatures(BaseTest):
         """set_cooldowns() behält interne Kopie, Ändern des übergebenen dicts ändert internen Status nicht"""
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
             path = f.name
 
         try:
@@ -413,10 +419,53 @@ class TestStateStoreAndFeatures(BaseTest):
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_legacy_cooldown_timestamps(self):
+        """Legacy naive cooldown timestamps sind local time and parsed UTC."""
+        import json
+        import tempfile
+        from datetime import datetime, timezone
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
+            path = f.name
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "cooldowns": {
+                        "app_legacy": {"count": 1, "cooldown_until": "2024-01-01T12:00:00"},
+                        "app_utc": {"count": 1, "cooldown_until": "2024-01-01T12:00:00+00:00"}
+                    }
+                }, f)
+
+            from state_store import StateStore
+            store = StateStore(path)
+            cooldowns = store.get_cooldowns()
+
+            # app_utc was already UTC
+            self.assertEqual(cooldowns["app_utc"]["cooldown_until"], datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
+
+            # app_legacy was naive local, now converted to UTC
+            legacy_dt = cooldowns["app_legacy"]["cooldown_until"]
+            self.assertIsNotNone(legacy_dt.tzinfo)
+
+            # _is_in_cooldown should not raise TypeError
+            from main import WatcherService
+            with patch('docker.from_env', return_value=self.mock_client):
+                service = WatcherService(self.config)
+
+            service.failure_tracker = cooldowns
+            service._is_in_cooldown("app_legacy")
+            service._is_in_cooldown("app_utc")
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
     def test_defensive_transaction_getter(self):
         """get_transactions() gibt defensive Kopie zurück"""
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
             path = f.name
 
         try:
