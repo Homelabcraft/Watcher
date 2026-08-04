@@ -195,7 +195,7 @@ class TestReleaseSafety(BaseTest):
         
         from models import UpdateStatus
         self.service.docker.get_recreation_plan = MagicMock(return_value=MagicMock())
-        self.service.docker.check_updates = MagicMock(return_value=(True, "old_image", "new_img_456"))
+        self.service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "old_image", "new_img_456"))
 
         info = self.service.process_container(c, True)
         self.assertEqual(info.status, UpdateStatus.FAILED)
@@ -285,9 +285,10 @@ class TestReleaseSafety(BaseTest):
         other.status = "running"
 
         self.mock_client.containers.list.return_value = [other]
-        with patch.object(self.service.docker, '_detect_self_id', return_value="me_123"):  # noqa: SIM117
-            with self.assertRaises(SystemExit):
-                self.service._check_single_instance()
+        self.mock_client.containers.get.return_value = me
+        
+        with self.assertRaises(SystemExit):
+            self.service._check_single_instance()
 
     def test_single_instance_custom_failure_safe(self):
         # failure to detect self ID doesn't crash but warns/handles gracefully if we are the only one
@@ -295,10 +296,18 @@ class TestReleaseSafety(BaseTest):
         other.id = "other_456"
         other.labels = {"watcher.self": "true"}
         other.status = "running"
-        self.mock_client.containers.list.return_value = [other]
-        with patch.object(self.service.docker, '_detect_self_id', return_value=None):  # noqa: SIM117
-            with self.assertRaises(SystemExit):
-                self.service._check_single_instance()
+        
+        me = MagicMock()
+        me.id = "me_123"
+        me.labels = {"watcher.self": "true"}
+        me.status = "running"
+        
+        self.mock_client.containers.list.return_value = [other, me]
+        import docker
+        self.mock_client.containers.get.side_effect = docker.errors.NotFound("Not found")
+
+        with self.assertRaises(SystemExit):
+            self.service._check_single_instance()
 
     def test_persisted_replacement_missing_backup_not_removed(self):
         self.service.state_store.start_transaction("app", "orig_123", "img_1", "img_2")
@@ -517,10 +526,14 @@ class TestReleaseSafety(BaseTest):
         mock_container = MagicMock()
         mock_container.id = "other_456"
         mock_container.labels = None
-        self.mock_client.containers.list.return_value = [mock_container]
         
-        with patch.object(self.service.docker, '_detect_self_id', return_value="me_123"):
-            self.service._check_single_instance()
+        me = MagicMock()
+        me.id = "me_123"
+        
+        self.mock_client.containers.list.return_value = [mock_container]
+        self.mock_client.containers.get.return_value = me
+        
+        self.service._check_single_instance()
 
 if __name__ == '__main__':
     unittest.main()

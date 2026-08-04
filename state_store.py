@@ -15,8 +15,9 @@ logger = logging.getLogger('Watcher.StateStore')
 class StateStore:
     """Manages persistent state across Watcher restarts (e.g. cooldowns, transactions)."""
     
-    def __init__(self, path: str):
+    def __init__(self, path: str, tz: str = "UTC"):
         self.path = path
+        self.tz = tz
         self._data = {"cooldowns": {}, "transactions": {}}
         self._load()
         
@@ -37,7 +38,8 @@ class StateStore:
                                 try:
                                     dt = datetime.fromisoformat(v["cooldown_until"])
                                     if dt.tzinfo is None:
-                                        dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo).astimezone(timezone.utc)
+                                        import zoneinfo
+                                        dt = dt.replace(tzinfo=zoneinfo.ZoneInfo(self.tz)).astimezone(timezone.utc)
                                     v["cooldown_until"] = dt
                                 except ValueError:
                                     v["cooldown_until"] = datetime.min.replace(tzinfo=timezone.utc)

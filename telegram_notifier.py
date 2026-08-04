@@ -88,9 +88,6 @@ class TelegramNotifier:
             self._send(f"🚨 ROLLBACK FAILED: {name}", safe_detail)
 
     def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
-        if not summary["updated"] and not summary["failed"] and not summary["rolled_back"] and not summary.get("reported"):
-            return
-            
         def format_info(name):
             safe_name = html.escape(name)
             if not infos: return safe_name
@@ -110,6 +107,10 @@ class TelegramNotifier:
             lines.append(f"Rolled Back:\n- {chr(10) + '- '.join([format_info(n) for n in summary['rolled_back']])}")
         if summary.get("skipped"):
             lines.append(f"Skipped (Cooldown):\n- {chr(10) + '- '.join([format_info(n) for n in summary['skipped']])}")
+            
+        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported"):
+            lines.append("ℹ️ No updates or errors detected.")
+
         self._send(f"📊 Watcher Scan Summary ({duration_sec:.1f}s)", "\n".join(lines))
 
     def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None:

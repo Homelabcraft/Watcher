@@ -132,7 +132,7 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | `watcher.enable` | `true/false` | Controls the update behavior for this container. |
 | `watcher.self` | `true` | **Mandatory:** Protects the Watcher instance from self-updating. |
 | `watcher.health.start_period` | `0` | Seconds to wait before starting health checks. |
-| `watcher.depends_on` | `app1,app2` | Comma-separated list of dependency containers. Restarts this container when they update. |
+| `watcher.depends_on` | `app1,app2` | Placed on the dependent container to list its dependencies. Restarts this container when the specified containers update. |
 
 ---
 

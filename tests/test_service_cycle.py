@@ -108,6 +108,48 @@ class TestWatcherService(BaseTest):
         mock_backup.rename.assert_called_once_with("test_app")
         mock_backup.start.assert_called_once()
 
+    def test_perform_rollback_incomplete_rename_success(self, mock_post):
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1", "img_1_new")
+        self.service.state_store.update_transaction("test_app", "backup_created", original_container_id="old_image_hash", original_image_id="img_1")
+
+        mock_current = MagicMock()
+        mock_current.id = "old_image_hash"
+        mock_current.image.id = "img_1"
+        def mock_get(n):
+            import docker
+            if n == "test_app": return mock_current
+            if n == "test_app_backup": raise docker.errors.NotFound("Not found")
+            raise docker.errors.NotFound("NotFound")
+        self.mock_client.containers.get.side_effect = mock_get
+        self.service.health.wait_for_health = MagicMock(return_value=True)
+
+        res, msg = self.service.perform_rollback("test_app")
+
+        self.assertTrue(res)
+        mock_current.start.assert_called_once()
+        mock_current.remove.assert_not_called()
+
+    def test_perform_rollback_incomplete_rename_failed(self, mock_post):
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1", "img_1_new")
+        self.service.state_store.update_transaction("test_app", "backup_created", original_container_id="old_image_hash", original_image_id="img_1")
+
+        mock_current = MagicMock()
+        mock_current.id = "old_image_hash"
+        mock_current.image.id = "img_1"
+        def mock_get(n):
+            import docker
+            if n == "test_app": return mock_current
+            if n == "test_app_backup": raise docker.errors.NotFound("Not found")
+            raise docker.errors.NotFound("NotFound")
+        self.mock_client.containers.get.side_effect = mock_get
+        self.service.health.wait_for_health = MagicMock(return_value=False)
+
+        res, msg = self.service.perform_rollback("test_app")
+
+        self.assertFalse(res)
+        mock_current.start.assert_called_once()
+        mock_current.remove.assert_not_called()
+
     def test_restart_dependents_network_mode_name(self, mock_post):
         dep = MagicMock()
         dep.name = "dep"
@@ -280,9 +322,22 @@ class TestWatcherService(BaseTest):
         self.assertIn("app1", kwargs["json"]["embeds"][0]["description"])
 
     def test_get_sleep_duration(self, mock_post):
+        from datetime import datetime, timedelta
+        import zoneinfo
+
         self.service.config.schedule_time = "14:30"
+        self.service.config.tz = "Europe/Zurich"
+        
+        tz = zoneinfo.ZoneInfo("Europe/Zurich")
+        now = datetime.now(tz)
+        target_time = datetime.strptime("14:30", "%H:%M").time()
+        target_dt = datetime.combine(now.date(), target_time).replace(tzinfo=tz)
+        if now >= target_dt:
+            target_dt += timedelta(days=1)
+        expected_duration = (target_dt - now).total_seconds()
+        
         duration = self.service._get_sleep_duration()
-        self.assertTrue(0 <= duration <= 86400)
+        self.assertAlmostEqual(duration, expected_duration, delta=2.0)
 
 if __name__ == '__main__':
     unittest.main()

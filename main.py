@@ -54,7 +54,7 @@ class WatcherService:
         self.docker = DockerHandler(self.client, self.config)
         self.notifier = build_notifier(self.config)
         self.health = HealthMonitor(self.client, self.shutdown_event)
-        self.state_store = StateStore(self.config.state_path)
+        self.state_store = StateStore(self.config.state_path, tz=self.config.tz)
         self.journal = Journal(
             self.config.journal_enabled,
             self.config.journal_path,
@@ -176,10 +176,10 @@ class WatcherService:
             plan = self.docker.get_recreation_plan(container)
 
             # Blocker 5: Protect container-network dependents
-            for c in self.client.containers.list():
+            for c in self.client.containers.list(all=True):
                 if c.id == old_id: continue
                 net_mode = c.attrs.get('HostConfig', {}).get('NetworkMode', '')
-                if net_mode == f"container:{old_id}" or net_mode == f"container:{name}":
+                if net_mode in (f"container:{old_id}", f"container:{old_id[:12]}", f"container:{name}"):
                     msg = f"Container {c.name} shares the network of {name} (NetworkMode={net_mode}). Updating {name} would break {c.name}. Manual recreation of both containers is required."
                     logger.error(msg)
                     info.status = UpdateStatus.FAILED
@@ -366,57 +366,69 @@ class WatcherService:
             # 1. Inspect current container under target name
             backup_name = f"{name}_backup"
             
-            # 1. Validate backup before touching replacement
-            backup = None
+            backup_name = f"{name}_backup"
+            
+            current_container = None
             try:
-                backup = self.client.containers.get(backup_name)
-                valid_backup_ids = {id_ for id_ in [original_container_id, backup_container_id] if id_}
-                if not valid_backup_ids or backup.id not in valid_backup_ids or backup.image.id != original_image_id:
-                    logger.error(f"Backup container {backup_name} identity mismatch! Refusing to restore.")
-                    msg = "Rollback failed: Backup identity mismatch."
-                    self.notifier.notify_rollback(name, "failed", msg)
-                    self._best_effort_update_tx(name, 'rollback_failed')
-                    return False, msg
+                current_container = self.client.containers.get(name)
             except docker.errors.NotFound:
-                logger.error(f"Backup {backup_name} not found. Rollback impossible.")
-                msg = "Rollback failed: Backup container not found."
+                pass
+            except Exception as e:
+                logger.error(f"Error handling current container during rollback: {e}")
+                msg = f"Rollback failed: {e}"
                 self.notifier.notify_rollback(name, "failed", msg)
                 self._best_effort_update_tx(name, 'rollback_failed')
                 return False, msg
-            except Exception as e: # noqa: BLE001
+
+            backup = None
+            try:
+                backup = self.client.containers.get(backup_name)
+            except docker.errors.NotFound:
+                pass
+            except Exception as e:
                 logger.error(f"Error accessing backup {backup_name}: {e}")
                 msg = f"Rollback failed: {e}"
                 self.notifier.notify_rollback(name, "failed", msg)
                 self._best_effort_update_tx(name, 'rollback_failed')
                 return False, msg
 
-            try:
-                current_container = self.client.containers.get(name)
-                if not new_container_id and tx.get("planned_new_image_id"):
-                    try:
-                        b = self.client.containers.get(backup_name)
-                        if b.image.id == original_image_id and (not original_container_id or b.id == original_container_id): # noqa: SIM102
-                            if current_container.image.id == tx.get("planned_new_image_id") and current_container.labels.get("watcher.transaction_id") == tx.get("transaction_id"):
-                                new_container_id = current_container.id
-                    except docker.errors.NotFound:
-                        pass
+            if current_container and current_container.id == original_container_id and current_container.image.id == original_image_id:
+                logger.info(f"Original container {name} is still in place. Verifying it...")
+                current_container.start()
+                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                    msg = "Original container recovered successfully."
+                    self.notifier.notify_rollback(name, "success", msg)
+                    self._best_effort_end_tx(name)
+                    return True, msg
+                else:
+                    msg = "Original container failed health check after rollback."
+                    self.notifier.notify_rollback(name, "failed", msg)
+                    self._best_effort_update_tx(name, 'rollback_failed')
+                    return False, msg
 
+            if not backup:
+                logger.error(f"Backup {backup_name} not found. Rollback impossible.")
+                msg = "Rollback failed: Backup container not found."
+                self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
+                return False, msg
+
+            valid_backup_ids = {id_ for id_ in [original_container_id, backup_container_id] if id_}
+            if not valid_backup_ids or backup.id not in valid_backup_ids or backup.image.id != original_image_id:
+                logger.error(f"Backup container {backup_name} identity mismatch! Refusing to restore.")
+                msg = "Rollback failed: Backup identity mismatch."
+                self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
+                return False, msg
+
+            if current_container:
+                if not new_container_id and tx.get("planned_new_image_id"):
+                    if current_container.image.id == tx.get("planned_new_image_id") and current_container.labels.get("watcher.transaction_id") == tx.get("transaction_id"):
+                        new_container_id = current_container.id
+                
                 if new_container_id and current_container.id == new_container_id:
                     logger.info(f"Removing failed new container {name}...")
                     current_container.remove(force=True)
-                elif current_container.id == original_container_id and current_container.image.id == original_image_id:
-                    logger.info(f"Original container {name} is still in place. Verifying it...")
-                    current_container.start()
-                    if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
-                        msg = "Original container recovered successfully."
-                        self.notifier.notify_rollback(name, "success", msg)
-                        self._best_effort_end_tx(name)
-                        return True, msg
-                    else:
-                        msg = "Original container failed health check after rollback."
-                        self.notifier.notify_rollback(name, "failed", msg)
-                        self._best_effort_update_tx(name, 'rollback_failed')
-                        return False, msg
                 else:
                     logger.error(f"Container {name} exists but does not match any valid IDs. Retaining.")
                     msg = "Rollback failed: Identity mismatch for main container."
@@ -424,35 +436,15 @@ class WatcherService:
                     self._best_effort_update_tx(name, 'rollback_failed')
                     return False, msg
 
-            except docker.errors.NotFound:
-                logger.debug(f"No container found with name {name} during rollback, proceeding to restore backup.")
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"Error handling current container during rollback: {e}")
-                msg = f"Rollback failed: {e}"
-                self.notifier.notify_rollback(name, "failed", msg)
-                self._best_effort_update_tx(name, 'rollback_failed')
-                return False, msg
-
             # 2. Restore backup
             try:
-                # backup is already fetched and validated
-
                 logger.info(f"Found backup {backup_name}. Restoring...")
-
-                # Perform rename and start defensively
-                try:
-                    backup.rename(name)
-                    backup.start()
-                    logger.info(f"Restored {name} from backup.")
-                except Exception as e:  # noqa: BLE001
-                    logger.error(f"Failed to rename or start backup container {backup_name}: {e}")
-                    msg = f"Critical failure: Could not rename or start backup: {str(e)}"  # noqa: RUF010
-                    self.notifier.notify_rollback(name, "failed", msg)
-                    self._best_effort_update_tx(name, 'rollback_failed')
-                    return False, msg
-            except docker.errors.NotFound:
-                logger.error(f"Backup {backup_name} not found. Rollback impossible.")
-                msg = "Rollback failed: Backup container not found."
+                backup.rename(name)
+                backup.start()
+                logger.info(f"Restored {name} from backup.")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Failed to rename or start backup container {backup_name}: {e}")
+                msg = f"Critical failure: Could not rename or start backup: {str(e)}"  # noqa: RUF010
                 self.notifier.notify_rollback(name, "failed", msg)
                 self._best_effort_update_tx(name, 'rollback_failed')
                 return False, msg
@@ -548,14 +540,17 @@ class WatcherService:
         if not self.config.schedule_time:
             return float(self.config.check_interval)
 
-        now = datetime.now().astimezone()
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo(self.config.tz)
+        now = datetime.now(tz)
+        
         try:
-            target_time = datetime.strptime(self.config.schedule_time, "%H:%M").replace(tzinfo=timezone.utc).time()
+            target_time = datetime.strptime(self.config.schedule_time, "%H:%M").time()
         except ValueError:
             logger.error(f"Invalid SCHEDULE_TIME: {self.config.schedule_time}. Falling back to 24h interval.")
             return 86400.0
 
-        target_dt = datetime.combine(now.date(), target_time).replace(tzinfo=now.tzinfo)
+        target_dt = datetime.combine(now.date(), target_time).replace(tzinfo=tz)
 
         if now >= target_dt:
             target_dt += timedelta(days=1)
@@ -837,8 +832,18 @@ class WatcherService:
 
         self.startup_recovery()
 
+        first_run = True
         try:
             while not self.shutdown_event.is_set():
+                if self.config.schedule_time and first_run:
+                    first_run = False
+                    sleep_sec = self._get_sleep_duration()
+                    next_run = (datetime.now() + timedelta(seconds=sleep_sec)).strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005
+                    logger.info(f"Scheduled mode: Sleeping until first run at {next_run}...")
+                    self.shutdown_event.wait(sleep_sec)
+                    if self.shutdown_event.is_set():
+                        break
+
                 self.run_cycle()
 
                 if self.shutdown_event.is_set():

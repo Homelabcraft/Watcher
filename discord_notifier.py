@@ -86,9 +86,6 @@ class DiscordNotifier:
             self.send_event(f"🚨 ROLLBACK FAILED: {name}", detail, color=0xc0392b)
 
     def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
-        if not summary["updated"] and not summary["failed"] and not summary["rolled_back"] and not summary.get("reported"):
-            return
-
         lines = [f"📊 **Watcher Scan Summary** (Duration: `{duration_sec:.1f}s`)"]
         
         def format_info(name):
@@ -108,6 +105,10 @@ class DiscordNotifier:
             lines.append(f"\n❌ **Failed:** {', '.join(summary['failed'])}")
         if summary.get("rolled_back"):
             lines.append(f"\n⚠️ **Rolled Back:** {', '.join(summary['rolled_back'])}")
+            
+        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported"):
+            lines.append("\nℹ️ No updates or errors detected.")
+
         if summary.get("skipped"):
             lines.append(f"\n⏭️ **Skipped (Cooldown):** {', '.join(summary['skipped'])}")
 

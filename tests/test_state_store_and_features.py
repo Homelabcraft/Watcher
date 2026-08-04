@@ -439,7 +439,7 @@ class TestStateStoreAndFeatures(BaseTest):
                 }, f)
 
             from state_store import StateStore
-            store = StateStore(path)
+            store = StateStore(path, tz="Europe/Zurich")
             cooldowns = store.get_cooldowns()
 
             # app_utc was already UTC
@@ -448,6 +448,9 @@ class TestStateStoreAndFeatures(BaseTest):
             # app_legacy was naive local, now converted to UTC
             legacy_dt = cooldowns["app_legacy"]["cooldown_until"]
             self.assertIsNotNone(legacy_dt.tzinfo)
+            import zoneinfo
+            zurich = zoneinfo.ZoneInfo("Europe/Zurich")
+            self.assertEqual(legacy_dt, datetime(2024, 1, 1, 12, 0, 0, tzinfo=zurich).astimezone(timezone.utc))
 
             # _is_in_cooldown should not raise TypeError
             from main import WatcherService

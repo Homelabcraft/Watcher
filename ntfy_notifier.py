@@ -81,9 +81,6 @@ class NtfyNotifier:
             self._send(f"ROLLBACK FAILED: {name}", detail, tags=["rotating_light"])
 
     def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
-        if not summary["updated"] and not summary["failed"] and not summary["rolled_back"] and not summary.get("reported"):
-            return
-            
         def format_info(name):
             if not infos: return name
             for info in infos:
@@ -100,6 +97,10 @@ class NtfyNotifier:
             lines.append(f"Failed: {', '.join(summary['failed'])}")
         if summary["rolled_back"]:
             lines.append(f"Rolled back: {', '.join(summary['rolled_back'])}")
+            
+        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported"):
+            lines.append("No updates or errors detected.")
+
         self._send(f"Watcher Scan Summary ({duration_sec:.1f}s)", "\n".join(lines), tags=["bar_chart"])
 
     def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None:
