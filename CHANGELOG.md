@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.7.0] - 2026-08-01
+## [Unreleased]
 ### Added
 - **Crash Recovery & Startup Reconciliation (`startup_recovery()`):** Watcher now automatically detects orphaned `_backup` containers on startup resulting from unexpected host reboots or power loss during an active update. It automatically reconciles the state by checking health and safely recovering the primary or backup container.
 - **Robust Persistence & Atomicity:** Both `state.json` and `journal.json` are now written using atomic temporary files (`os.replace`) with aggressive disk syncing (`f.flush()`, `os.fsync()`) to prevent JSON corruption during power loss. Added automatic detection and backup of corrupted state files.

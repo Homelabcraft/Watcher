@@ -18,7 +18,7 @@ class BaseTest(unittest.TestCase):
         self.env_patcher = patch.dict(os.environ, {
             "STATE_PATH": self.state_path,
             "JOURNAL_PATH": self.journal_path,
-            "DISCORD_WEBHOOK_URL": "http://mock",
+            "DISCORD_WEBHOOK_URL": "",
             "CHECK_INTERVAL": "60",
             "WATCH_BY_LABEL": "false",
             "DRY_RUN": "false"

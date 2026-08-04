@@ -371,8 +371,10 @@ class DockerHandler:
                     except Exception as net_e:  # noqa: BLE001
                         logger.error(f"Net-Connect error for {net_name}: {net_e}")
                         if new_container:
-                            try: new_container.remove(force=True)
-                            except Exception: pass  # noqa: BLE001, S110
+                            try:
+                                new_container.remove(force=True)
+                            except Exception as e_remove: # noqa: BLE001
+                                logger.error(f"Failed to remove container {new_container.id}: {e_remove}")
                         raise RecreationError(f"Failed to connect secondary network {net_name}: {net_e}")
 
                 new_container.start()
@@ -398,8 +400,8 @@ class DockerHandler:
                     if new_container:
                         try:
                             new_container.remove(force=True)
-                        except Exception:  # noqa: BLE001, S110
-                            pass
+                        except Exception as e_remove: # noqa: BLE001
+                            logger.error(f"Failed to remove new container: {e_remove}")
 
                     ca.pop("user")
                     continue

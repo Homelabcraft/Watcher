@@ -83,7 +83,8 @@ class TestJournalAndNotifications(BaseTest):
             self.assertTrue(service._is_in_cooldown(name))
             
             # Wait for cooldown to expire (simulated)
-            service.failure_tracker[name]["cooldown_until"] = datetime.now() - timedelta(seconds=1) # noqa: DTZ005
+            from datetime import timezone
+            service.failure_tracker[name]["cooldown_until"] = datetime.now(timezone.utc) - timedelta(seconds=1)
             self.assertFalse(service._is_in_cooldown(name))
             
             # Successful check should clear it

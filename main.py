@@ -1,19 +1,18 @@
-import logging  # noqa: I001
+import copy
+import logging
 import signal
 import socket
 import sys
 import threading
 import time
-import copy
-from exceptions import StateStoreError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import docker
 from docker.models.containers import Container
 
 from config import Config
 from docker_handler import DockerHandler
-from exceptions import ConfigurationError, RecreationError
+from exceptions import ConfigurationError, RecreationError, StateStoreError
 from health_monitor import HealthMonitor
 from journal import Journal
 from models import ContainerUpdateInfo, ExecutionPlan, UpdateStatus
@@ -103,7 +102,7 @@ class WatcherService:
         if tracker["count"] < self.config.max_retries_before_cooldown:
             return False
 
-        if datetime.now() < tracker["cooldown_until"]:  # noqa: DTZ005, SIM103
+        if datetime.now(timezone.utc) < tracker["cooldown_until"]:  # noqa: SIM103
             return True
 
         return False
@@ -322,9 +321,9 @@ class WatcherService:
     def _record_failure(self, name: str):
         """Internal helper to increment failure count and set cooldown."""
         new_tracker = copy.deepcopy(self.failure_tracker)
-        tracker = new_tracker.get(name, {"count": 0, "cooldown_until": datetime.min})  # noqa: DTZ901
+        tracker = new_tracker.get(name, {"count": 0, "cooldown_until": datetime.min.replace(tzinfo=timezone.utc)})
         tracker["count"] += 1
-        tracker["cooldown_until"] = datetime.now() + timedelta(seconds=self.config.failure_cooldown_seconds)  # noqa: DTZ005
+        tracker["cooldown_until"] = datetime.now(timezone.utc) + timedelta(seconds=self.config.failure_cooldown_seconds)
         new_tracker[name] = tracker
         self._update_cooldowns_persistently(new_tracker, name)
         logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
@@ -384,7 +383,7 @@ class WatcherService:
                 self.notifier.notify_rollback(name, "failed", msg)
                 self._best_effort_update_tx(name, 'rollback_failed')
                 return False, msg
-            except Exception as e:
+            except Exception as e: # noqa: BLE001
                 logger.error(f"Error accessing backup {backup_name}: {e}")
                 msg = f"Rollback failed: {e}"
                 self.notifier.notify_rollback(name, "failed", msg)
@@ -549,9 +548,9 @@ class WatcherService:
         if not self.config.schedule_time:
             return float(self.config.check_interval)
 
-        now = datetime.now()  # noqa: DTZ005
+        now = datetime.now(timezone.utc)
         try:
-            target_time = datetime.strptime(self.config.schedule_time, "%H:%M").time()  # noqa: DTZ007
+            target_time = datetime.strptime(self.config.schedule_time, "%H:%M").replace(tzinfo=timezone.utc).time()
         except ValueError:
             logger.error(f"Invalid SCHEDULE_TIME: {self.config.schedule_time}. Falling back to 24h interval.")
             return 86400.0
@@ -632,7 +631,7 @@ class WatcherService:
                     if main_c.status != "running":
                         logger.info(f"Starting stopped original container {name}...")
                         main_c.start()
-                except Exception as e:
+                except Exception as e: # noqa: BLE001
                     logger.error(f"Failed to start original container {name}: {e}")
                     return
                 
@@ -641,7 +640,7 @@ class WatcherService:
                         logger.warning(f"Both original main and backup exist for {name}. Removing redundant backup.")
                         try:
                             backup_c.remove(force=True)
-                        except Exception as e:
+                        except Exception as e: # noqa: BLE001
                             logger.error(f"Failed to remove redundant backup: {e}")
                             return
                     logger.info(f"Original container {name} is healthy. Ending transaction.")

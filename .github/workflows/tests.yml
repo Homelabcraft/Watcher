@@ -31,3 +31,5 @@ jobs:
         run: python -m unittest discover -s tests -p "test_*.py" -v
       - name: Check for formatting changes
         run: git diff --check
+      - name: Check dependencies
+        run: python -m pip check

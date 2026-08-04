@@ -1,6 +1,8 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
+import docker
 from base_test import BaseTest
 
 # Env setup moved to setUp
@@ -74,7 +76,7 @@ class TestWatcherService(BaseTest):
                 b.rename.side_effect = Exception("Rename failed")
                 return b
             if n == "test_app": raise docker.errors.NotFound("Not found")
-            raise Exception("NotFound")
+            raise docker.errors.NotFound("NotFound")
         self.mock_client.containers.get.side_effect = mock_get
 
         self.service.perform_rollback("test_app")
@@ -97,7 +99,7 @@ class TestWatcherService(BaseTest):
         def mock_get(n):
             if n == "test_app": return mock_current
             if n == "test_app_backup": return mock_backup
-            raise Exception("NotFound")
+            raise docker.errors.NotFound("NotFound")
         self.mock_client.containers.get.side_effect = mock_get
         self.service.health.wait_for_health = MagicMock(return_value=True)
 
@@ -268,6 +270,9 @@ class TestWatcherService(BaseTest):
         dep1.restart.assert_not_called()
 
     def test_summary_includes_reported(self, mock_post):
+        self.service.config.discord_webhook_url = "http://mock"
+        from notifier_factory import build_notifier
+        self.service.notifier = build_notifier(self.service.config)
         summary = {"updated": [], "failed": [], "rolled_back": [], "reported": ["app1", "app2"]}
         self.service.notifier.notify_summary_report(summary)
 

@@ -55,12 +55,7 @@ To verify the watcher with real containers, follow these steps using harmless `:
    WATCH_BY_LABEL=true
    ```
 
-3. Start your environment:
-   ```bash
-   docker compose up -d
-   ```
-
-4. The correct sandbox initialization sequence:
+3. The correct sandbox initialization sequence:
    To ensure the container's `Config.Image` remains exactly `nginx:latest` while running an outdated instance, you must tag the old image locally *before* creating the test application:
    ```bash
    # Pull an older image

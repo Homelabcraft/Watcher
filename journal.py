@@ -1,7 +1,9 @@
 import json
 import logging
 import os
-from datetime import datetime
+import shutil
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger('Watcher.Journal')
@@ -37,14 +39,12 @@ class Journal:
                 self._history = []
 
     def _backup_corrupted(self):
-        import shutil
-        import time
         logger.warning(f"Journal at {self.path} is invalid/corrupted. Backing up and resetting.")
         backup_path = f"{self.path}.corrupted_{int(time.time())}"
         try:
             shutil.copy(self.path, backup_path)
-        except Exception: # noqa: BLE001, S110
-            pass
+        except Exception as e: # noqa: BLE001
+            logger.error(f"Failed to backup corrupted journal: {e}")
 
     def _save(self):
         if not self.enabled:
@@ -64,13 +64,17 @@ class Journal:
         except OSError as e:
             logger.error(f"Failed to save journal (IO Error): {e}")
             if os.path.exists(f"{self.path}.tmp"):
-                try: os.remove(f"{self.path}.tmp")
-                except: pass # noqa: E722, S110
+                try:
+                    os.remove(f"{self.path}.tmp")
+                except Exception as e2: # noqa: BLE001
+                    logger.error(f"Failed to clean up temp file: {e2}")
         except Exception as e: # noqa: BLE001
             logger.error(f"Unexpected journal save error: {e}")
             if os.path.exists(f"{self.path}.tmp"):
-                try: os.remove(f"{self.path}.tmp")
-                except: pass # noqa: E722, S110
+                try:
+                    os.remove(f"{self.path}.tmp")
+                except Exception as e2: # noqa: BLE001
+                    logger.error(f"Failed to clean up temp file: {e2}")
 
     def record_cycle(self, 
                      total_checked: int, 
@@ -101,7 +105,7 @@ class Journal:
             })
 
         entry = {
-            "timestamp": datetime.now().isoformat(), # noqa: DTZ005
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "run_mode": run_mode,
             "duration_sec": round(duration_sec, 2),
             "checked_containers": total_checked,

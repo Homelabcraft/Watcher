@@ -13,7 +13,7 @@ from models import UpdateStatus
 from state_store import StateStoreError
 
 
-class TestNewFeatures(BaseTest):
+class TestReleaseSafety(BaseTest):
     def setUp(self):
         super().setUp()
         self.mock_client = MagicMock()
@@ -225,10 +225,12 @@ class TestNewFeatures(BaseTest):
         self.mock_client.containers.get.side_effect = get_mock
         plan = {"create_args": {"image": "img", "name": "app"}, "networks": {}}
 
-        try:
-            self.service.docker.recreate("app", plan)
-        except Exception: # noqa: BLE001, S110
-            pass # we only care about the stop part
+        # We mock what is needed so recreation doesn't fail
+        self.mock_client.images.get.return_value = MagicMock()
+        self.service.docker._connect_networks = MagicMock()
+        self.service.docker._disconnect_networks = MagicMock()
+
+        self.service.docker.recreate("app", plan)
 
         c.stop.assert_called_once()
         self.assertTrue(c.reload.call_count >= 1)
@@ -506,10 +508,7 @@ class TestNewFeatures(BaseTest):
         self.service.health.wait_for_health = MagicMock(return_value=True) # Healthy
         
         with patch.object(self.service.state_store, 'end_transaction', side_effect=Exception("DB Error")):
-            try:
-                self.service._process_single_recovery("app", tx)
-            except Exception:  # noqa: BLE001, S110
-                pass
+            self.service._process_single_recovery("app", tx)
             
         mock_main.remove.assert_not_called()
         self.assertIn("app", self.service.state_store.get_transactions())
