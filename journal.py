@@ -1,8 +1,10 @@
 import json
 import logging
 import os
-from datetime import datetime
-from typing import Any, List, Dict
+import shutil
+import time
+from datetime import datetime, timezone
+from typing import Any
 
 logger = logging.getLogger('Watcher.Journal')
 
@@ -12,7 +14,7 @@ class Journal:
         self.enabled = enabled
         self.path = path
         self.max_entries = max_entries
-        self._history: List[Dict[str, Any]] = []
+        self._history: list[dict[str, Any]] = []
         
         if self.enabled:
             self._load()
@@ -23,14 +25,26 @@ class Journal:
                 with open(self.path, 'r', encoding='utf-8') as f:
                     self._history = json.load(f)
                     if not isinstance(self._history, list):
-                        logger.warning(f"Journal at {self.path} is invalid. Resetting.")
+                        self._backup_corrupted()
                         self._history = []
-            except (json.JSONDecodeError, IOError) as e:
-                logger.error(f"Failed to load journal: {e}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to load journal (JSON Decode Error): {e}")
+                self._backup_corrupted()
                 self._history = []
-            except Exception as e:
+            except OSError as e:
+                logger.error(f"Failed to load journal (IO Error): {e}")
+                self._history = []
+            except Exception as e: # noqa: BLE001
                 logger.error(f"Unexpected journal load error: {e}")
                 self._history = []
+
+    def _backup_corrupted(self):
+        logger.warning(f"Journal at {self.path} is invalid/corrupted. Backing up and resetting.")
+        backup_path = f"{self.path}.corrupted_{int(time.time())}"
+        try:
+            shutil.copy(self.path, backup_path)
+        except Exception as e: # noqa: BLE001
+            logger.error(f"Failed to backup corrupted journal: {e}")
 
     def _save(self):
         if not self.enabled:
@@ -38,18 +52,35 @@ class Journal:
         try:
             # History rotation: Keep only the configured max_entries
             to_save = self._history[-self.max_entries:]
-            with open(self.path, 'w', encoding='utf-8') as f:
+            self._history = to_save  # Truncate in memory too
+            
+            os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
+            temp_path = f"{self.path}.tmp"
+            with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump(to_save, f, indent=2, ensure_ascii=False)
-        except IOError as e:
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self.path)
+        except OSError as e:
             logger.error(f"Failed to save journal (IO Error): {e}")
-        except Exception as e:
+            if os.path.exists(f"{self.path}.tmp"):
+                try:
+                    os.remove(f"{self.path}.tmp")
+                except Exception as e2: # noqa: BLE001
+                    logger.error(f"Failed to clean up temp file: {e2}")
+        except Exception as e: # noqa: BLE001
             logger.error(f"Unexpected journal save error: {e}")
+            if os.path.exists(f"{self.path}.tmp"):
+                try:
+                    os.remove(f"{self.path}.tmp")
+                except Exception as e2: # noqa: BLE001
+                    logger.error(f"Failed to clean up temp file: {e2}")
 
     def record_cycle(self, 
                      total_checked: int, 
                      run_mode: str, 
-                     summary: Dict[str, List[str]], 
-                     all_infos: List[Any], 
+                     summary: dict[str, list[str]], 
+                     all_infos: list[Any], 
                      duration_sec: float):
         """Adds a new cycle record to the history."""
         if not self.enabled:
@@ -74,7 +105,7 @@ class Journal:
             })
 
         entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "run_mode": run_mode,
             "duration_sec": round(duration_sec, 2),
             "checked_containers": total_checked,

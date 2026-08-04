@@ -1,22 +1,23 @@
-import time
+import copy
 import logging
-import docker
-import sys
 import signal
-import threading
 import socket
-import re
-from datetime import datetime, timedelta
-from typing import Optional
+import sys
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+
+import docker
+from docker.models.containers import Container
 
 from config import Config
-from notifier_factory import build_notifier
 from docker_handler import DockerHandler
+from exceptions import ConfigurationError, RecreationError, StateStoreError
 from health_monitor import HealthMonitor
 from journal import Journal
-from docker.models.containers import Container
-from models import UpdateStatus, ContainerUpdateInfo, ExecutionPlan
-from exceptions import ConfigurationError, RecreationError
+from models import ContainerUpdateInfo, ExecutionPlan, UpdateStatus
+from notifier_factory import build_notifier
+from state_store import StateStore
 
 # Logger setup
 logging.basicConfig(
@@ -27,39 +28,72 @@ logging.basicConfig(
 logger = logging.getLogger('Watcher')
 
 class WatcherService:
-    def __init__(self):
+    def __init__(self, config=None):
         try:
-            self.config = Config()
+            self.config = config or Config()
         except ConfigurationError as e:
             logger.critical(f"Startup failed due to configuration error: {e}")
             sys.exit(1)
-            
+
         # Dynamically set logging level based on config
         log_level = getattr(logging, self.config.log_level, logging.INFO)
         logging.getLogger().setLevel(log_level)
         for handler in logging.getLogger().handlers:
             handler.setLevel(log_level)
-            
+
         try:
             self.client = docker.from_env(timeout=120)
-        except Exception as e:
-            logger.critical(f"Docker connection failed: {e}")
+            self.client.ping()
+        except Exception as e:  # noqa: BLE001
+            logger.critical(f"Docker connection failed or daemon is unavailable: {e}")
             sys.exit(1)
-            
+
+        self._check_single_instance()
+
+        self.shutdown_event = threading.Event()
         self.docker = DockerHandler(self.client, self.config)
         self.notifier = build_notifier(self.config)
-        self.health = HealthMonitor(self.client)
+        self.health = HealthMonitor(self.client, self.shutdown_event)
+        self.state_store = StateStore(self.config.state_path, tz=self.config.tz)
         self.journal = Journal(
-            self.config.journal_enabled, 
-            self.config.journal_path, 
+            self.config.journal_enabled,
+            self.config.journal_path,
             max_entries=self.config.journal_max_entries
         )
-        
-        # 1.6.0 Failure tracking
-        self.failure_tracker = {} # name -> {"count": int, "cooldown_until": datetime}
-        
-        self.shutdown_event = threading.Event()
+        self.failure_tracker = self.state_store.get_cooldowns()
+        self.abort_updates_for_cycle = False
+
         self._setup_signals()
+
+    def _check_single_instance(self):
+        """Ensures no other Watcher instance is running on the same daemon."""
+        try:
+            hostname = socket.gethostname()
+            self_c = self.client.containers.get(hostname)
+            self_id = self_c.id
+        except Exception:  # noqa: BLE001
+            self_id = None
+
+        marked_containers = []
+        for c in self.client.containers.list():
+            if self_id and c.id == self_id:
+                continue
+            labels = c.labels or {}
+            if labels.get("watcher.self") == "true":
+                marked_containers.append(c)
+                
+        if self_id:
+            if marked_containers:
+                logger.critical(f"Multiple Watcher instances detected! Container {marked_containers[0].name} is also marked with watcher.self=true. Refusing to start.")
+                sys.exit(1)
+        else:
+            if not marked_containers:
+                logger.warning("Could not identify self container and found no container marked with watcher.self=true. Ensure watcher.self=true is set on this container.")
+            elif len(marked_containers) == 1:
+                logger.info("Self-ID detection failed, but found exactly one container marked with watcher.self=true. Assuming this is the current instance.")
+            else:
+                logger.critical(f"Multiple Watcher instances detected! Found {len(marked_containers)} containers marked with watcher.self=true. Refusing to start.")
+                sys.exit(1)
 
     def _setup_signals(self):
         """Setup graceful shutdown on SIGINT and SIGTERM."""
@@ -77,13 +111,13 @@ class WatcherService:
         tracker = self.failure_tracker.get(name)
         if not tracker:
             return False
-            
+
         if tracker["count"] < self.config.max_retries_before_cooldown:
             return False
-            
-        if datetime.now() < tracker["cooldown_until"]:
+
+        if datetime.now(timezone.utc) < tracker["cooldown_until"]:  # noqa: SIM103
             return True
-            
+
         return False
 
     def process_container(self, container: Container, auto_update: bool) -> ContainerUpdateInfo:
@@ -94,40 +128,44 @@ class WatcherService:
         ref = self.docker.get_image_ref(container)
         recreate_started = False
         start_time = time.perf_counter()
-        
+
         info = ContainerUpdateInfo(name=name, old_id=old_id, status=UpdateStatus.FAILED, image_ref=ref)
 
         try:
+            # Check for pending transaction
+            if name in self.state_store.get_transactions():
+                logger.warning(f"Pending transaction exists for {name}. Skipping update. Manual intervention or recovery may be required.")
+                info.status = UpdateStatus.FAILED
+                info.error_message = "Pending transaction exists"
+                info.error_step = "transaction_check"
+                self.notifier.notify_update_failure(info)
+                return info
+
             # 1. Update Detection
             info.error_step = "update_check"
             status, old_img, new_img = self.docker.check_for_update(container)
-            
+
             def shorten_hash(h):
                 if not h: return None
                 return h[7:19] if h.startswith("sha256:") else h[:12]
-                
+
             info.old_image_short_id = shorten_hash(old_img)
             info.new_image_short_id = shorten_hash(new_img)
-            
+
             if status == UpdateStatus.NO_UPDATE:
                 info.status = UpdateStatus.NO_UPDATE
                 info.error_step = None
                 # Success/No-change clears the failure tracker
                 if name in self.failure_tracker:
-                    del self.failure_tracker[name]
+                    new_tracker = copy.deepcopy(self.failure_tracker)
+                    del new_tracker[name]
+                    self._update_cooldowns_persistently(new_tracker, name)
                 return info
             if status == UpdateStatus.FAILED:
                 logger.error(f"Update check failed for {name}")
                 info.error_message = "Update check failed"
                 self.notifier.notify_update_failure(info)
                 self._record_failure(name)
-                return info
-
-            # Dry Run: Record UPDATE_AVAILABLE but stop execution
-            if self.config.dry_run:
-                logger.info(f"[DRY] Update available for {name} ({info.old_image_short_id} -> {info.new_image_short_id})")
-                info.status = UpdateStatus.UPDATE_AVAILABLE
-                info.error_step = None
                 return info
 
             # Hybrid Mode: If not auto_update, we stop here and just report
@@ -137,43 +175,112 @@ class WatcherService:
                 info.error_step = None
                 return info
 
+            # Dry Run: Record UPDATE_AVAILABLE but stop execution
+            if self.config.dry_run:
+                logger.info(f"[DRY] Update available for {name} ({info.old_image_short_id} -> {info.new_image_short_id})")
+                info.status = UpdateStatus.UPDATE_AVAILABLE
+                info.error_step = None
+                return info
+
             # 2. State Capture
             info.error_step = "state_capture"
             container.reload()
             current_status = container.status
             plan = self.docker.get_recreation_plan(container)
+
+            # Blocker 5: Protect container-network dependents
+            for c in self.client.containers.list(all=True):
+                if c.id == old_id: continue
+                net_mode = c.attrs.get('HostConfig', {}).get('NetworkMode', '')
+                if net_mode in (f"container:{old_id}", f"container:{old_id[:12]}", f"container:{name}"):
+                    msg = f"Container {c.name} shares the network of {name} (NetworkMode={net_mode}). Updating {name} would break {c.name}. Manual recreation of both containers is required."
+                    logger.error(msg)
+                    info.status = UpdateStatus.FAILED
+                    info.error_message = f"Blocked by network dependent {c.name}"
+                    info.error_step = "dependency_check"
+                    self.notifier.notify_summary("🚨 Blocked Update", msg)
+                    return info
+
             dependents = self.get_dependents([name], [old_id])
 
             # 3. Execution
+            try:
+                transaction_id = self.state_store.start_transaction(name, old_id, old_image_id, new_img)
+            except StateStoreError as e:
+                self.abort_updates_for_cycle = True
+                logger.error(f"StateStoreError during start_transaction for {name}: {e}")
+                info.status = UpdateStatus.FAILED
+                info.error_message = f"State save failed: {e}"
+                info.error_step = "start_transaction"
+                info.duration_sec = time.perf_counter() - start_time
+                self.notifier.notify_update_failure(info)
+                return info
+
             info.error_step = "recreate"
             logger.info(f"Updating {name}...")
             if self.config.notify_on_update_start:
                 self.notifier.notify_update_started(name, ref, info.old_image_short_id, info.new_image_short_id, current_status, dependents)
-            
+
             recreate_started = True
-            new_container = self.docker.recreate(name, plan)
+            new_container = self.docker.recreate(name, plan, self.state_store, transaction_id=transaction_id)
             if new_container:
                 info.new_id = new_container.id
+                # status updated inside recreate
 
             # 4. Verification
             info.error_step = "health_check"
             if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                 logger.info(f"Success: {name}")
-                self.docker.remove_backup(name)
-                
+                try:
+                    self.state_store.update_transaction(name, "replacement_verified")
+                except StateStoreError as e:
+                    self.abort_updates_for_cycle = True
+                    logger.error(f"StateStoreError during update_transaction for {name}: {e}")
+                    self.notifier.notify_summary("⚠️ State Error", f"Failed to save replacement_verified state for {name}. Keeping backup and aborting further updates.")
+                    info.status = UpdateStatus.FAILED
+                    info.error_message = "State save failed before cleanup"
+                    info.error_step = "state_save"
+                    info.duration_sec = time.perf_counter() - start_time
+                    self.notifier.notify_update_failure(info)
+                    return info
+
+                if not self.docker.remove_backup(name):
+                    self.notifier.notify_summary("⚠️ Backup Removal Failed", f"Could not remove {name}_backup. Transaction retained.")
+                    info.status = UpdateStatus.FAILED
+                    info.error_message = "Backup removal failed"
+                    info.error_step = "cleanup"
+                    info.duration_sec = time.perf_counter() - start_time
+                    self.notifier.notify_update_failure(info)
+                    return info
+
+                try:
+                    self.state_store.end_transaction(name)
+                except StateStoreError as e:
+                    self.abort_updates_for_cycle = True
+                    logger.error(f"StateStoreError during end_transaction for {name}: {e}")
+                    self.notifier.notify_summary("⚠️ State Error after Success", f"Update successful but state save failed: {e}. Stopping further updates in this cycle.")
+                    info.status = UpdateStatus.FAILED
+                    info.error_message = "State save failed after cleanup"
+                    info.error_step = "state_save"
+                    info.duration_sec = time.perf_counter() - start_time
+                    self.notifier.notify_update_failure(info)
+                    return info
+
                 # 5. Cleanup (Only after success)
                 if self.config.cleanup_old_images:
                     self.docker.remove_image(old_image_id)
-                
+
                 info.status = UpdateStatus.UPDATED
                 info.error_step = None
                 info.duration_sec = time.perf_counter() - start_time
                 self.notifier.notify_update_success(info)
-                
+
                 # Success clears the failure tracker
                 if name in self.failure_tracker:
-                    del self.failure_tracker[name]
-                    
+                    new_tracker = copy.deepcopy(self.failure_tracker)
+                    del new_tracker[name]
+                    self._update_cooldowns_persistently(new_tracker, name)
+
                 return info
             else:
                 logger.error(f"Health failed: {name}. Rolling back...")
@@ -181,9 +288,9 @@ class WatcherService:
                 info.status = UpdateStatus.ROLLED_BACK
                 info.error_step = "health_check"
                 info.rollback_attempted = True
-                
+
                 # Do rollback
-                rb_success, rb_detail = self.perform_rollback(name, old_image_id)
+                rb_success, rb_detail = self.perform_rollback(name)
                 info.rollback_success = rb_success
                 info.rollback_details = rb_detail
                 info.duration_sec = time.perf_counter() - start_time
@@ -194,29 +301,31 @@ class WatcherService:
         except RecreationError as e:
             logger.error(f"Recreation failed for {name}: {e}")
             info.error_message = str(e)
-            
+
             if recreate_started:
                 logger.info(f"Attempting rollback for {name} after recreation error...")
                 info.rollback_attempted = True
-                rb_success, rb_detail = self.perform_rollback(name, old_image_id)
+                rb_success, rb_detail = self.perform_rollback(name)
                 info.rollback_success = rb_success
                 info.rollback_details = rb_detail
-                
+
             info.duration_sec = time.perf_counter() - start_time
             self.notifier.notify_update_failure(info)
             self._record_failure(name)
             return info
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            if isinstance(e, StateStoreError):
+                self.abort_updates_for_cycle = True
             logger.error(f"Error processing {name}: {e}")
             info.error_message = str(e)
-            
+
             if recreate_started:
                 logger.info(f"Attempting rollback for {name} after execution error...")
                 info.rollback_attempted = True
-                rb_success, rb_detail = self.perform_rollback(name, old_image_id)
+                rb_success, rb_detail = self.perform_rollback(name)
                 info.rollback_success = rb_success
                 info.rollback_details = rb_detail
-                
+
             info.duration_sec = time.perf_counter() - start_time
             self.notifier.notify_update_failure(info)
             self._record_failure(name)
@@ -224,71 +333,152 @@ class WatcherService:
 
     def _record_failure(self, name: str):
         """Internal helper to increment failure count and set cooldown."""
-        tracker = self.failure_tracker.get(name, {"count": 0, "cooldown_until": datetime.min})
+        new_tracker = copy.deepcopy(self.failure_tracker)
+        tracker = new_tracker.get(name, {"count": 0, "cooldown_until": datetime.min.replace(tzinfo=timezone.utc)})
         tracker["count"] += 1
-        tracker["cooldown_until"] = datetime.now() + timedelta(seconds=self.config.failure_cooldown_seconds)
-        self.failure_tracker[name] = tracker
+        tracker["cooldown_until"] = datetime.now(timezone.utc) + timedelta(seconds=self.config.failure_cooldown_seconds)
+        new_tracker[name] = tracker
+        self._update_cooldowns_persistently(new_tracker, name)
         logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
 
-    def perform_rollback(self, name: str, old_id: str) -> tuple[bool, str]:
+    def _update_cooldowns_persistently(self, new_tracker: dict, name: str):
+        try:
+            self.state_store.set_cooldowns(new_tracker)
+            self.failure_tracker = new_tracker
+        except Exception as e:  # noqa: BLE001
+            if isinstance(e, StateStoreError):
+                self.abort_updates_for_cycle = True
+            logger.error(f"Error setting cooldowns for {name}: {e}")
+
+    def _best_effort_update_tx(self, name: str, phase: str):
+        try:
+            self.state_store.update_transaction(name, phase)
+        except StateStoreError as e:
+            self.abort_updates_for_cycle = True
+            logger.error(f"StateStoreError during rollback update ({phase}) for {name}: {e}. Continuing physical rollback.")
+
+    def _best_effort_end_tx(self, name: str):
+        try:
+            self.state_store.end_transaction(name)
+        except StateStoreError as e:
+            self.abort_updates_for_cycle = True
+            logger.error(f"StateStoreError during rollback end_transaction for {name}: {e}. Continuing physical rollback.")
+
+    def perform_rollback(self, name: str) -> tuple[bool, str]:
         """Rollback using the saved backup container."""
         logger.warning(f"ROLLBACK for {name}")
+        self._best_effort_update_tx(name, "rollback_started")
         self.notifier.notify_rollback(name, "started")
         try:
+            tx = self.state_store.get_transactions().get(name, {})
+            new_container_id = tx.get("new_container_id")
+            original_container_id = tx.get("original_container_id")
+            backup_container_id = tx.get("backup_container_id")
+            original_image_id = tx.get("original_image_id")
+
             # 1. Inspect current container under target name
+            backup_name = f"{name}_backup"
+            
+            current_container = None
             try:
                 current_container = self.client.containers.get(name)
-                # Check image ID to see if update actually happened
-                if current_container.image.id == old_id:
-                    logger.info(f"Original container {name} is still in place (rename likely failed). Starting it...")
-                    current_container.start()
-                    msg = "Original container recovered (update didn't complete)."
-                    self.notifier.notify_rollback(name, "success", msg)
-                    return True, msg
-                else:
-                    logger.info(f"Removing failed new container {name}...")
-                    current_container.remove(force=True)
             except docker.errors.NotFound:
-                logger.debug(f"No container found with name {name} during rollback, proceeding to restore backup.")
+                pass
             except Exception as e:
                 logger.error(f"Error handling current container during rollback: {e}")
+                msg = f"Rollback failed: {e}"
+                self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
+                return False, msg
 
-            # 2. Restore backup
-            backup_name = f"{name}_backup"
+            backup = None
             try:
                 backup = self.client.containers.get(backup_name)
-                logger.info(f"Found backup {backup_name}. Restoring...")
-                
-                # Perform rename and start defensively
-                try:
-                    backup.rename(name)
-                    backup.start()
-                    logger.info(f"Restored {name} from backup.")
-                except Exception as e:
-                    logger.error(f"Failed to rename or start backup container {backup_name}: {e}")
-                    msg = f"Critical failure: Could not rename or start backup: {str(e)}"
+            except docker.errors.NotFound:
+                pass
+            except Exception as e:
+                logger.error(f"Error accessing backup {backup_name}: {e}")
+                msg = f"Rollback failed: {e}"
+                self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
+                return False, msg
+
+            if current_container and current_container.id == original_container_id and current_container.image.id == original_image_id:
+                logger.info(f"Original container {name} is still in place. Verifying it...")
+                current_container.reload()
+                if current_container.status != "running":
+                    current_container.start()
+                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                    msg = "Original container recovered successfully."
+                    self.notifier.notify_rollback(name, "success", msg)
+                    self._best_effort_end_tx(name)
+                    return True, msg
+                else:
+                    msg = "Original container failed health check after rollback."
                     self.notifier.notify_rollback(name, "failed", msg)
+                    self._best_effort_update_tx(name, 'rollback_failed')
                     return False, msg
 
-            except docker.errors.NotFound:
+            if not backup:
                 logger.error(f"Backup {backup_name} not found. Rollback impossible.")
                 msg = "Rollback failed: Backup container not found."
                 self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
+                return False, msg
+
+            valid_backup_ids = {id_ for id_ in [original_container_id, backup_container_id] if id_}
+            if not valid_backup_ids or backup.id not in valid_backup_ids or backup.image.id != original_image_id:
+                logger.error(f"Backup container {backup_name} identity mismatch! Refusing to restore.")
+                msg = "Rollback failed: Backup identity mismatch."
+                self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
+                return False, msg
+
+            if current_container:
+                if not new_container_id and tx.get("planned_new_image_id"):
+                    labels = current_container.labels or {}
+                    if current_container.image.id == tx.get("planned_new_image_id") and labels.get("watcher.transaction_id") == tx.get("transaction_id"):
+                        new_container_id = current_container.id
+                
+                if new_container_id and current_container.id == new_container_id:
+                    logger.info(f"Removing failed new container {name}...")
+                    current_container.remove(force=True)
+                else:
+                    logger.error(f"Container {name} exists but does not match any valid IDs. Retaining.")
+                    msg = "Rollback failed: Identity mismatch for main container."
+                    self.notifier.notify_rollback(name, "failed", msg)
+                    self._best_effort_update_tx(name, 'rollback_failed')
+                    return False, msg
+
+            # 2. Restore backup
+            try:
+                logger.info(f"Found backup {backup_name}. Restoring...")
+                backup.rename(name)
+                backup.start()
+                logger.info(f"Restored {name} from backup.")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Failed to rename or start backup container {backup_name}: {e}")
+                msg = f"Critical failure: Could not rename or start backup: {str(e)}"  # noqa: RUF010
+                self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
                 return False, msg
 
             # 3. Final verification
             if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                 msg = "Restored from backup and healthy."
                 self.notifier.notify_rollback(name, "success", msg)
+                self._best_effort_end_tx(name)
                 return True, msg
             else:
                 msg = "Container stopped or unhealthy after rollback attempt."
                 self.notifier.notify_rollback(name, "failed", msg)
+                self._best_effort_update_tx(name, 'rollback_failed')
                 return False, msg
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"CRITICAL ROLLBACK FAILURE for {name}: {e}")
-            msg = f"Unexpected error during rollback: {str(e)}"
+            msg = f"Unexpected error during rollback: {str(e)}"  # noqa: RUF010
             self.notifier.notify_rollback(name, "failed", msg)
+            self._best_effort_update_tx(name, 'rollback_failed')
             return False, msg
 
     def get_dependents(self, updated_names: list[str], updated_ids: list[str]) -> list[str]:
@@ -301,10 +491,10 @@ class WatcherService:
                     continue
                 if c.name in updated_names:
                     continue
-                    
+
                 depends_on = labels.get(self.config.depends_on_label_key, "")
                 depends_list = [d.strip() for d in depends_on.split(",") if d.strip()]
-                
+
                 net_mode = c.attrs.get('HostConfig', {}).get('NetworkMode', '')
                 is_net_dependent = False
                 if net_mode.startswith('container:'):
@@ -316,10 +506,10 @@ class WatcherService:
                             f"UNSUPPORTED DEPENDENCY: {c.name} references {target[:12]} via ID. "
                             "This reference is now broken. Manual recreate of dependent container required."
                         )
-                        
+
                 if is_net_dependent or any(u in depends_list for u in updated_names):
                     dependents.append(c.name)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error finding dependents: {e}")
         return dependents
 
@@ -330,17 +520,19 @@ class WatcherService:
         """
         if not self.config.restart_dependents:
             return
-            
+
         if not updated_containers:
             return
-            
+
         updated_names = [u.name for u in updated_containers]
         updated_ids = [u.old_id for u in updated_containers]
-        
+
         dependent_names = self.get_dependents(updated_names, updated_ids)
         if not dependent_names:
             return
-            
+
+        restarted = []
+        failures = []
         try:
             for c in self.client.containers.list():
                 if c.name in dependent_names:
@@ -348,66 +540,230 @@ class WatcherService:
                     try:
                         c.restart(timeout=15)
                         logger.info(f"Successfully restarted dependent {c.name}.")
-                    except Exception as e:
+                        restarted.append(c.name)
+                    except Exception as e:  # noqa: BLE001
                         logger.error(f"Failed to restart dependent {c.name}: {e}")
-        except Exception as e:
+                        failures.append((c.name, str(e)))
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error checking dependents: {e}")
+
+        if restarted or failures:
+            self.notifier.notify_dependents_restarted(restarted, failures)
 
     def _get_sleep_duration(self) -> float:
         if not self.config.schedule_time:
             return float(self.config.check_interval)
-            
-        now = datetime.now()
+
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo(self.config.tz)
+        now = datetime.now(tz)
+        
         try:
             target_time = datetime.strptime(self.config.schedule_time, "%H:%M").time()
         except ValueError:
             logger.error(f"Invalid SCHEDULE_TIME: {self.config.schedule_time}. Falling back to 24h interval.")
             return 86400.0
 
-        target_dt = datetime.combine(now.date(), target_time)
-        
+        target_dt = datetime.combine(now.date(), target_time).replace(tzinfo=tz)
+
         if now >= target_dt:
             target_dt += timedelta(days=1)
-            
-        return (target_dt - now).total_seconds()
+
+        return target_dt.timestamp() - now.timestamp()
+
+    def startup_recovery(self):
+        """Resolves aborted updates using StateStore transactions."""
+        try:
+            transactions = self.state_store.get_transactions()
+
+            # Find orphaned backups
+            known_backups = {tx.get("backup_name") for tx in transactions.values()}
+            for c in self.client.containers.list(all=True):
+                if c.name.endswith("_backup") and c.name not in known_backups:
+                    logger.warning(f"Orphaned backup container found without transaction: {c.name}")
+                    self.notifier.notify_summary("⚠️ Orphaned Backup", f"Found {c.name} without transaction. Manual intervention required.")
+
+            if not transactions:
+                return
+
+            for name, tx in list(transactions.items()):
+                self._process_single_recovery(name, tx)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error during startup recovery: {e}")
+
+    def _process_single_recovery(self, name: str, tx: dict):
+        try:
+            phase = tx.get("phase")
+            transaction_id = tx.get("transaction_id")
+            logger.warning(f"Found pending transaction for {name} in phase {phase}")
+
+            orig_id = tx.get("original_container_id")
+            orig_image_id = tx.get("original_image_id")
+            backup_name = tx.get("backup_name", f"{name}_backup")
+            new_container_id = tx.get("new_container_id")
+            new_image_id = tx.get("new_image_id")
+            planned_new_image_id = tx.get("planned_new_image_id")
+
+            # Identify main container
+            main_c = None
+            try:
+                main_c = self.client.containers.get(name)
+            except docker.errors.NotFound:
+                pass
+
+            # Identify backup container
+            backup_c = None
+            try:
+                backup_c = self.client.containers.get(backup_name)
+                # Verify backup identity
+                if backup_c.image.id != orig_image_id or (orig_id and backup_c.id != orig_id):
+                    logger.error(f"Backup container {backup_name} identity mismatch. Discarding backup reference.")
+                    backup_c = None
+            except docker.errors.NotFound:
+                pass
+
+            # If main container matches exact new container plan but we lack new_container_id (crash during create)
+            if main_c and not new_container_id and planned_new_image_id:  # noqa: SIM102
+                if main_c.image.id == planned_new_image_id and main_c.labels.get("watcher.transaction_id") == transaction_id:
+                    logger.info(f"Discovered unpersisted replacement container for {name}.")
+                    new_container_id = main_c.id
+                    new_image_id = main_c.image.id
+                    self.state_store.update_transaction(name, "replacement_created", new_container_id=new_container_id, new_image_id=new_image_id)
+
+            # Condition A: Main container matches original
+            if main_c and main_c.id == orig_id and main_c.image.id == orig_image_id:
+                logger.info(f"Main container {name} matches original identity.")
+                
+                logger.info(f"Original {name} is untouched. Verifying health before cleanup.")
+                try:
+                    main_c.reload()
+                    if main_c.status != "running":
+                        logger.info(f"Starting stopped original container {name}...")
+                        main_c.start()
+                except Exception as e: # noqa: BLE001
+                    logger.error(f"Failed to start original container {name}: {e}")
+                    return
+                
+                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                    if backup_c:
+                        logger.warning(f"Both original main and backup exist for {name}. Removing redundant backup.")
+                        try:
+                            backup_c.remove(force=True)
+                        except Exception as e: # noqa: BLE001
+                            logger.error(f"Failed to remove redundant backup: {e}")
+                            return
+                    logger.info(f"Original container {name} is healthy. Ending transaction.")
+                    self.state_store.end_transaction(name)
+                else:
+                    logger.error(f"Original container {name} failed health check. Retaining backup and transaction.")
+                    self._best_effort_update_tx(name, "rollback_failed")
+                return
+
+            # Condition B: Main container matches new container exactly
+            if main_c and new_container_id and main_c.id == new_container_id and main_c.image.id == new_image_id and main_c.labels.get("watcher.transaction_id") == transaction_id:
+                logger.info(f"Main container {name} matches new replacement identity.")
+                main_c.reload()
+                if main_c.status != "running":
+                    main_c.start()
+
+                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                    logger.info(f"New container {name} is healthy.")
+                    if backup_c:
+                        logger.info(f"Removing backup {backup_name}.")
+                        backup_c.remove(force=True)
+                    self.state_store.end_transaction(name)
+                else:
+                    logger.warning(f"New container {name} is unhealthy. Rolling back...")
+                    if backup_c:
+                        main_c.remove(force=True)
+                        backup_c.rename(name)
+                        backup_c.start()
+                        if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                            logger.info(f"Rollback successful for {name}.")
+                            self.state_store.end_transaction(name)
+                        else:
+                            logger.error(f"Recovered container {name} unhealthy.")
+                            self.state_store.update_transaction(name, "rollback_failed")
+                    else:
+                        logger.error(f"No backup available for {name} rollback. Retention of unhealthy replacement for diagnostics.")
+                        self.state_store.update_transaction(name, "rollback_failed")
+                        self.notifier.notify_summary("🚨 Recovery Error", f"Replacement {name} is unhealthy but no backup exists. Manual intervention required.")
+                return
+
+            # Condition C: Backup exists and matches original, main is missing or invalid
+            if backup_c:
+                if main_c:
+                    logger.error(f"Valid backup exists for {name}, but an unknown container occupies the main name. Aborting automatic recovery.")
+                    self.notifier.notify_summary("🚨 Recovery Error", f"Unknown main container {name} prevents rollback. Manual intervention required.")
+                    return
+
+                logger.info(f"Valid backup exists for {name}. Main is missing. Restoring backup.")
+                backup_c.rename(name)
+                backup_c.start()
+                if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
+                    logger.info(f"Rollback successful for {name}.")
+                    self.state_store.end_transaction(name)
+                else:
+                    logger.error(f"Recovered container {name} unhealthy.")
+                    self.state_store.update_transaction(name, "rollback_failed")
+                return
+
+            # Condition D: Neither valid main nor valid backup exists
+            logger.error(f"CRITICAL: Neither valid main nor valid backup exists for {name}. Transaction unrecoverable.")
+            self.notifier.notify_summary("🚨 Recovery Failed", f"Container {name} is completely missing. Manual intervention required.")
+            self.state_store.update_transaction(name, "rollback_failed")
+
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error processing recovery for {name}: {e}")
 
     def run_cycle(self):
+        self.abort_updates_for_cycle = False
         cycle_start = time.perf_counter()
         logger.info("--- Cycle Start ---")
-        auto_update, monitor_only = self.docker.get_watched_containers()
-        
+        try:
+            auto_update, monitor_only = self.docker.get_watched_containers()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Scan aborted due to docker error: {e}")
+            self.notifier.notify_summary("🚨 Watcher Error", f"Failed to list containers: {e}")
+            self.journal.record_cycle(0, "ERROR", {"updated": [], "failed": ["Scan aborted"], "rolled_back": [], "reported": [], "skipped": []}, [], time.perf_counter() - cycle_start)
+            return
+
         total_checked = len(auto_update) + len(monitor_only)
         self.notifier.notify_scan_started(total_checked, "DRY_RUN" if self.config.dry_run else "LIVE")
-        
+
         summary = {"updated": [], "failed": [], "rolled_back": [], "reported": [], "skipped": []}
         updated_info = []
         all_infos = []
-        
+
         plan = ExecutionPlan(checked_containers=total_checked)
         update_count = 0
-        
+
         # Helper to process containers with cooldown check
         def handle_container_list(container_list, is_auto):
             nonlocal update_count
             for c in container_list:
                 if self.shutdown_event.is_set():
                     break
-                
+
                 if self._is_in_cooldown(c.name):
                     logger.info(f"Skipping {c.name} (in error cooldown)")
                     info = ContainerUpdateInfo(c.name, c.id, UpdateStatus.SKIPPED_COOLDOWN)
                     all_infos.append(info)
                     summary["skipped"].append(c.name)
                     continue
-                
-                # Check for max updates limit
-                if is_auto and self.config.max_updates_per_cycle > 0 and update_count >= self.config.max_updates_per_cycle:
-                    logger.info(f"Max updates reached for this cycle. Skipping {c.name}.")
-                    continue
 
-                info = self.process_container(c, auto_update=is_auto)
+                # Check for max updates limit
+                attempt_update = is_auto
+                if self.abort_updates_for_cycle:
+                    if attempt_update:
+                        logger.warning(f"Skipping update for {c.name} due to active StateStoreError in this cycle.")
+                    attempt_update = False
+                elif is_auto and self.config.max_updates_per_cycle > 0 and update_count >= self.config.max_updates_per_cycle:
+                    attempt_update = False
+
+                info = self.process_container(c, auto_update=attempt_update)
                 all_infos.append(info)
-                
+
                 if info.status == UpdateStatus.UPDATE_AVAILABLE:
                     plan.updates_available.append(info)
                 elif info.status == UpdateStatus.REPORTED:
@@ -419,54 +775,56 @@ class WatcherService:
                     update_count += 1
                 elif info.status == UpdateStatus.FAILED:
                     summary["failed"].append(info.name)
+                    if attempt_update: update_count += 1
                 elif info.status == UpdateStatus.ROLLED_BACK:
                     summary["rolled_back"].append(info.name)
+                    if attempt_update: update_count += 1
 
         handle_container_list(auto_update, True)
         handle_container_list(monitor_only, False)
-                
+
         if self.config.dry_run:
             if plan.updates_available:
                 names = [u.name for u in plan.updates_available]
                 ids = [u.old_id for u in plan.updates_available]
                 plan.dependents_to_restart = self.get_dependents(names, ids)
-            
+
             next_run = None
             if self.config.schedule_time:
                 duration = self._get_sleep_duration()
-                next_run = (datetime.now() + timedelta(seconds=duration)).strftime("%Y-%m-%d %H:%M")
-                
+                next_run = (datetime.now() + timedelta(seconds=duration)).strftime("%Y-%m-%d %H:%M")  # noqa: DTZ005
+
             self.notifier.notify_execution_plan(plan, next_run)
             self.journal.record_cycle(total_checked, "DRY_RUN", summary, all_infos, time.perf_counter() - cycle_start)
             logger.info("--- Dry Run Cycle End ---")
             return
-                
+
         if updated_info:
             self.restart_dependents(updated_info)
-            
+
         cycle_duration = time.perf_counter() - cycle_start
         self.journal.record_cycle(total_checked, "LIVE", summary, all_infos, cycle_duration)
-        
+
         # Apply Notification Strategy
-        # Decision for 1.6.0: 'on_change' only triggers if an ACTION occurred (Update, Fail, Rollback).
+        # 'on_change' only triggers if an ACTION occurred (Update, Fail, Rollback).
         # Pure 'reported' (monitor-only updates) do NOT trigger a summary if strategy is 'on_change'.
         should_notify = True
         strategy = self.config.notify_summary_strategy
-        
+
         has_errors = len(summary["failed"]) > 0 or len(summary["rolled_back"]) > 0
         has_actions = len(summary["updated"]) > 0 or has_errors
-        
+
         if strategy == "on_error":
             should_notify = has_errors
         elif strategy == "on_change":
             should_notify = has_actions
-            
+
         if should_notify:
             # Optionally hide "Updates Available" from summary report
             if not self.config.notify_updates_available:
                 summary["reported"] = []
             self.notifier.notify_summary_report(summary, all_infos, duration_sec=cycle_duration)
-            
+
         logger.info("--- Cycle End ---")
 
     def start(self):
@@ -482,25 +840,43 @@ class WatcherService:
             "journal_enabled": self.config.journal_enabled,
             "cooldown_seconds": self.config.failure_cooldown_seconds
         }
-        
+
         if self.config.notify_on_startup:
             self.notifier.notify_startup(config_dict, socket.gethostname())
-            
+
+        self.startup_recovery()
+
+        first_run = True
         try:
             while not self.shutdown_event.is_set():
+                if self.config.schedule_time and first_run:
+                    first_run = False
+                    sleep_sec = self._get_sleep_duration()
+                    import zoneinfo
+                    tz = zoneinfo.ZoneInfo(self.config.tz)
+                    now = datetime.now(tz)
+                    next_run = datetime.fromtimestamp(now.timestamp() + sleep_sec, tz).strftime("%Y-%m-%d %H:%M:%S")
+                    logger.info(f"Scheduled mode: Sleeping until first run at {next_run}...")
+                    self.shutdown_event.wait(sleep_sec)
+                    if self.shutdown_event.is_set():
+                        break
+
                 self.run_cycle()
-                
+
                 if self.shutdown_event.is_set():
                     break
-                
+
                 sleep_sec = self._get_sleep_duration()
                 if self.config.schedule_time:
-                    next_run = (datetime.now() + timedelta(seconds=sleep_sec)).strftime("%Y-%m-%d %H:%M:%S")
+                    import zoneinfo
+                    tz = zoneinfo.ZoneInfo(self.config.tz)
+                    now = datetime.now(tz)
+                    next_run = datetime.fromtimestamp(now.timestamp() + sleep_sec, tz).strftime("%Y-%m-%d %H:%M:%S")
                     logger.info(f"Sleeping until next scheduled run at {next_run}...")
-                
+
                 self.shutdown_event.wait(sleep_sec)
-                    
-        except Exception as e:
+
+        except Exception as e:  # noqa: BLE001
             logger.critical(f"Crashed: {e}")
         finally:
             logger.info("Watcher stopped securely.")

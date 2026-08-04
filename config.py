@@ -1,10 +1,13 @@
-import os
 import logging
+import os
 import re
+
 from dotenv import load_dotenv
+
 from exceptions import ConfigurationError
 
-load_dotenv()
+if "UNITTEST_MODE" not in os.environ:
+    load_dotenv()
 
 logger = logging.getLogger('Watcher.Config')
 
@@ -14,6 +17,8 @@ class Config:
         # Operational
         self.check_interval = self._parse_int("CHECK_INTERVAL", 86400)
         self.schedule_time = os.getenv("SCHEDULE_TIME")
+        if self.schedule_time:
+            self.schedule_time = self.schedule_time.strip()
         self.discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         self.ntfy_url = os.getenv("NTFY_URL")
@@ -21,6 +26,7 @@ class Config:
         self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.dry_run = self._parse_bool("DRY_RUN", False)
         self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+        self.tz = os.getenv("TZ", "UTC")
         
         # Notifications
         self.notify_updates_available = self._parse_bool("NOTIFY_UPDATES_AVAILABLE", True)
@@ -32,7 +38,7 @@ class Config:
         self.reg_pass = os.getenv("REGISTRY_PASSWORD")
         
         # Selection & Exclusion
-        self.watch_by_label = self._parse_bool("WATCH_BY_LABEL", False)
+        self.watch_by_label = self._parse_bool("WATCH_BY_LABEL", True)
         self.watch_label_key = os.getenv("WATCH_LABEL_KEY", "watcher.enable")
         self.watch_label_value = os.getenv("WATCH_LABEL_VALUE", "true")
         
@@ -53,14 +59,16 @@ class Config:
         # Cleanup
         self.cleanup_old_images = self._parse_bool("CLEANUP_OLD_IMAGES", False)
         
-        # 1.6.0 Cooldown & Journal
+        # Cooldown & Journal
         self.failure_cooldown_seconds = self._parse_int("FAILURE_COOLDOWN_SECONDS", 3600)
         self.max_retries_before_cooldown = self._parse_int("MAX_RETRIES_BEFORE_COOLDOWN", 1)
         self.journal_enabled = self._parse_bool("JOURNAL_ENABLED", True)
-        self.journal_path = os.getenv("JOURNAL_PATH", "journal.json")
+        self.journal_path = os.getenv("JOURNAL_PATH", "/app/data/journal.json")
+        self.state_path = os.getenv("STATE_PATH", "/app/data/state.json")
         self.journal_max_entries = self._parse_int("JOURNAL_MAX_ENTRIES", 100)
+        self.allow_user_fallback = self._parse_bool("ALLOW_USER_FALLBACK", False)
         
-        # New 1.6.0 Options
+        # New Options
         self.max_updates_per_cycle = self._parse_int("MAX_UPDATES_PER_CYCLE", 0) # 0 = unlimited
         self.restart_dependents = self._parse_bool("RESTART_DEPENDENTS", True)
         self.notify_on_startup = self._parse_bool("NOTIFY_ON_STARTUP", True)
@@ -107,15 +115,15 @@ class Config:
         if self.health_check_delay < 1:
             raise ConfigurationError("HEALTH_CHECK_DELAY must be at least 1 second.")
 
-        if self.discord_webhook_url:
+        if self.discord_webhook_url: # noqa: SIM102
             if not (self.discord_webhook_url.startswith("http://") or self.discord_webhook_url.startswith("https://")):
                 raise ConfigurationError("DISCORD_WEBHOOK_URL must start with http:// or https://")
 
-        if self.slack_webhook_url:
+        if self.slack_webhook_url: # noqa: SIM102
             if not (self.slack_webhook_url.startswith("http://") or self.slack_webhook_url.startswith("https://")):
                 raise ConfigurationError("SLACK_WEBHOOK_URL must start with http:// or https://")
 
-        if self.ntfy_url:
+        if self.ntfy_url: # noqa: SIM102
             if not (self.ntfy_url.startswith("http://") or self.ntfy_url.startswith("https://")):
                 raise ConfigurationError("NTFY_URL must start with http:// or https://")
 
@@ -139,3 +147,21 @@ class Config:
 
         if bool(self.reg_user) != bool(self.reg_pass):
             logger.warning("Registry authentication: Only one of REGISTRY_USERNAME or REGISTRY_PASSWORD is set. Auth might fail if both are required.")
+
+        if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            raise ConfigurationError(f"Invalid LOG_LEVEL: {self.log_level}")
+
+        if self.failure_cooldown_seconds < 0:
+            raise ConfigurationError("FAILURE_COOLDOWN_SECONDS cannot be negative.")
+
+        if self.max_retries_before_cooldown < 1:
+            raise ConfigurationError("MAX_RETRIES_BEFORE_COOLDOWN must be at least 1.")
+
+        if self.state_path == self.journal_path:
+            raise ConfigurationError("STATE_PATH and JOURNAL_PATH cannot be identical.")
+
+        try:
+            import zoneinfo
+            zoneinfo.ZoneInfo(self.tz)
+        except Exception:
+            raise ConfigurationError(f"Invalid TZ: {self.tz}")

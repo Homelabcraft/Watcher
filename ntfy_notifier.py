@@ -1,6 +1,7 @@
 import logging
+
 import requests
-from typing import Optional
+
 from models import ContainerUpdateInfo, ExecutionPlan
 
 logger = logging.getLogger("Watcher.Ntfy")
@@ -9,10 +10,10 @@ logger = logging.getLogger("Watcher.Ntfy")
 class NtfyNotifier:
     """Publish to an ntfy topic (https://ntfy.sh or self-hosted). Set NTFY_URL to the full topic URL."""
 
-    def __init__(self, topic_url: Optional[str]):
+    def __init__(self, topic_url: str | None):
         self.topic_url = topic_url
 
-    def _send(self, title: str, body: str, tags: list[str] = None) -> None:
+    def _send(self, title: str, body: str, tags: list[str] | None = None) -> None:
         if not self.topic_url:
             return
         try:
@@ -29,7 +30,7 @@ class NtfyNotifier:
             logger.warning("Ntfy webhook notification timed out.")
         except requests.exceptions.RequestException as e:
             logger.error(f"ntfy notify failed: {e}")
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             logger.error(f"Unexpected error during ntfy notification: {e}")
 
     def notify_scan_started(self, total_containers: int, run_mode: str) -> None:
@@ -79,10 +80,7 @@ class NtfyNotifier:
         else:
             self._send(f"ROLLBACK FAILED: {name}", detail, tags=["rotating_light"])
 
-    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] = None, duration_sec: float = 0.0) -> None:
-        if not summary["updated"] and not summary["failed"] and not summary["rolled_back"] and not summary.get("reported"):
-            return
-            
+    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
         def format_info(name):
             if not infos: return name
             for info in infos:
@@ -99,9 +97,13 @@ class NtfyNotifier:
             lines.append(f"Failed: {', '.join(summary['failed'])}")
         if summary["rolled_back"]:
             lines.append(f"Rolled back: {', '.join(summary['rolled_back'])}")
+            
+        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported"):
+            lines.append("No updates or errors detected.")
+
         self._send(f"Watcher Scan Summary ({duration_sec:.1f}s)", "\n".join(lines), tags=["bar_chart"])
 
-    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str = None) -> None:
+    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None:
         if not plan.updates_available and not plan.monitored_only:
             return
 

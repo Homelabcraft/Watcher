@@ -1,14 +1,15 @@
-import logging
-import requests
 import datetime
-from typing import Optional
-from models import ExecutionPlan, ContainerUpdateInfo, UpdateStatus
+import logging
+
+import requests
+
+from models import ContainerUpdateInfo, ExecutionPlan
 
 logger = logging.getLogger('Watcher.Discord')
 
 class DiscordNotifier:
     """Sends structured Discord notifications for the update lifecycle."""
-    def __init__(self, webhook_url: Optional[str]):
+    def __init__(self, webhook_url: str | None):
         self.webhook_url = webhook_url
 
     def _send(self, payload: dict):
@@ -19,10 +20,10 @@ class DiscordNotifier:
             logger.warning("Discord webhook notification timed out.")
         except requests.exceptions.RequestException as e:
             logger.error(f"Discord notify failed: {e}")
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             logger.error(f"Unexpected error during Discord notification: {e}")
 
-    def send_event(self, title: str, description: str, color: int = 0x3498db, fields: list = None):
+    def send_event(self, title: str, description: str, color: int = 0x3498db, fields: list | None = None):
         embed = {
             "title": title,
             "description": description,
@@ -84,10 +85,7 @@ class DiscordNotifier:
         else:
             self.send_event(f"🚨 ROLLBACK FAILED: {name}", detail, color=0xc0392b)
 
-    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] = None, duration_sec: float = 0.0) -> None:
-        if not summary["updated"] and not summary["failed"] and not summary["rolled_back"] and not summary.get("reported"):
-            return
-
+    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None:
         lines = [f"📊 **Watcher Scan Summary** (Duration: `{duration_sec:.1f}s`)"]
         
         def format_info(name):
@@ -99,24 +97,28 @@ class DiscordNotifier:
 
         if summary.get("reported"):
             reported_formatted = [format_info(n) for n in summary['reported']]
-            lines.append(f"\n👀 **Updates Available (Not Auto-Updated):**\n- " + "\n- ".join(reported_formatted))
+            lines.append("\n👀 **Updates Available (Not Auto-Updated):**\n- " + "\n- ".join(reported_formatted))
         if summary["updated"]:
             updated_formatted = [format_info(n) for n in summary['updated']]
-            lines.append(f"\n✅ **Updated:**\n- " + "\n- ".join(updated_formatted))
+            lines.append("\n✅ **Updated:**\n- " + "\n- ".join(updated_formatted))
         if summary["failed"]:
             lines.append(f"\n❌ **Failed:** {', '.join(summary['failed'])}")
         if summary.get("rolled_back"):
             lines.append(f"\n⚠️ **Rolled Back:** {', '.join(summary['rolled_back'])}")
+            
+        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported"):
+            lines.append("\nℹ️ No updates or errors detected.")
+
         if summary.get("skipped"):
             lines.append(f"\n⏭️ **Skipped (Cooldown):** {', '.join(summary['skipped'])}")
 
         self.send_event("Cycle Complete", "\n".join(lines), color=0x9b59b6)
 
-    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str = None) -> None:
+    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None:
         if not plan.updates_available and not plan.monitored_only:
             return
 
-        lines = [f"📋 **Dry Run Execution Plan**"]
+        lines = ["📋 **Dry Run Execution Plan**"]
         lines.append(f"Containers checked: {plan.checked_containers}")
         
         if plan.updates_available:
@@ -136,7 +138,7 @@ class DiscordNotifier:
                     lines.append(f"- **{u.name}** (Update found)")
 
         if plan.dependents_to_restart:
-            lines.append(f"\n🔗 **Would Restart Dependents:**")
+            lines.append("\n🔗 **Would Restart Dependents:**")
             lines.append(f"- {', '.join(plan.dependents_to_restart)}")
             
         if next_run:

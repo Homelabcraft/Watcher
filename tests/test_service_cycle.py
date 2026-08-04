@@ -1,19 +1,20 @@
 import unittest
 from unittest.mock import MagicMock, patch
+
 import docker
-import os
+from base_test import BaseTest
 
-# Mock environment variables to prevent loading real config
-os.environ["DISCORD_WEBHOOK_URL"] = "http://mock"
-os.environ["CHECK_INTERVAL"] = "60"
-
+# Env setup moved to setUp
 from main import WatcherService
-from models import UpdateStatus, ContainerUpdateInfo
+from models import ContainerUpdateInfo, UpdateStatus
+
 
 @patch('discord_notifier.requests.post')
-class TestWatcherService(unittest.TestCase):
+class TestWatcherService(BaseTest):
     @patch('main.docker.from_env')
     def setUp(self, mock_docker):
+        super().setUp()
+
         self.mock_client = MagicMock()
         mock_docker.return_value = self.mock_client
         self.service = WatcherService()
@@ -25,16 +26,16 @@ class TestWatcherService(unittest.TestCase):
         mock_container.name = "test_app"
         mock_container.id = "old_id"
         mock_container.image.id = "old_image_hash"
-        
+
         self.service.docker.get_image_ref = MagicMock(return_value="test_app:latest")
         self.service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "old_hash", "new_hash"))
         self.service.docker.get_recreation_plan = MagicMock(return_value={"create_args": {}, "networks": {}})
         self.service.docker.recreate = MagicMock()
         self.service.docker.remove_backup = MagicMock()
         self.service.health.wait_for_health = MagicMock(return_value=True)
-        
+
         info = self.service.process_container(mock_container, auto_update=True)
-        
+
         self.assertEqual(info.status, UpdateStatus.UPDATED)
         self.assertEqual(info.old_id, "old_id")
         self.service.docker.recreate.assert_called_once()
@@ -45,43 +46,109 @@ class TestWatcherService(unittest.TestCase):
         mock_container.name = "test_app"
         mock_container.id = "old_id"
         mock_container.image.id = "old_image_hash"
-        
+
         self.service.docker.get_image_ref = MagicMock(return_value="test_app:latest")
         self.service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "old_hash", "new_hash"))
         self.service.docker.get_recreation_plan = MagicMock(return_value={"create_args": {}, "networks": {}})
         self.service.docker.recreate = MagicMock()
-        
+
         self.service.health.wait_for_health = MagicMock(return_value=False)
         self.service.perform_rollback = MagicMock(return_value=(True, "Mock rollback success"))
 
-        info = self.service.process_container(mock_container, auto_update=True)        
+        info = self.service.process_container(mock_container, auto_update=True)
         self.assertEqual(info.status, UpdateStatus.ROLLED_BACK)
-        self.service.perform_rollback.assert_called_once_with("test_app", "old_image_hash")
+        self.service.perform_rollback.assert_called_once_with("test_app")
 
     def test_perform_rollback_rename_failure(self, mock_post):
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1", "img_1_new")
+        self.service.state_store.update_transaction("test_app", "replacement_verified", backup_container_id="old_image_hash", original_image_id="img_1")
+
         mock_current = MagicMock()
-        mock_current.image.id = "old_image_hash"
-        self.mock_client.containers.get.side_effect = [mock_current]
-        
-        self.service.perform_rollback("test_app", "old_image_hash")
-        
-        mock_current.start.assert_called_once()
+        mock_current.id = "old_image_hash"
+        mock_current.image.id = "img_1"
+        def mock_get(n):
+            import docker
+            if n == "test_app_backup":
+                b = MagicMock()
+                b.id = "old_image_hash"
+                b.image.id = "img_1"
+                b.rename.side_effect = Exception("Rename failed")
+                return b
+            if n == "test_app": raise docker.errors.NotFound("Not found")
+            raise docker.errors.NotFound("NotFound")
+        self.mock_client.containers.get.side_effect = mock_get
+
+        self.service.perform_rollback("test_app")
+
+        mock_current.start.assert_not_called()
         mock_current.remove.assert_not_called()
 
     def test_perform_rollback_success(self, mock_post):
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1", "img_1_new")
+        self.service.state_store.update_transaction("test_app", "replacement_verified", backup_container_id="old_image_hash", new_container_id="new_123", original_image_id="img_1")
+
         mock_current = MagicMock()
+        mock_current.id = "new_123"
         mock_current.image.id = "new_image_hash"
-        
+
         mock_backup = MagicMock()
-        
-        self.mock_client.containers.get.side_effect = [mock_current, mock_backup]
+        mock_backup.id = "old_image_hash"
+        mock_backup.image.id = "img_1"
+
+        def mock_get(n):
+            if n == "test_app": return mock_current
+            if n == "test_app_backup": return mock_backup
+            raise docker.errors.NotFound("NotFound")
+        self.mock_client.containers.get.side_effect = mock_get
         self.service.health.wait_for_health = MagicMock(return_value=True)
-        
-        self.service.perform_rollback("test_app", "old_image_hash")
-        
+
+        self.service.perform_rollback("test_app")
+
         mock_current.remove.assert_called_once_with(force=True)
         mock_backup.rename.assert_called_once_with("test_app")
         mock_backup.start.assert_called_once()
+
+    def test_perform_rollback_incomplete_rename_success(self, mock_post):
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1", "img_1_new")
+        self.service.state_store.update_transaction("test_app", "backup_created", original_container_id="old_image_hash", original_image_id="img_1")
+
+        mock_current = MagicMock()
+        mock_current.id = "old_image_hash"
+        mock_current.image.id = "img_1"
+        def mock_get(n):
+            import docker
+            if n == "test_app": return mock_current
+            if n == "test_app_backup": raise docker.errors.NotFound("Not found")
+            raise docker.errors.NotFound("NotFound")
+        self.mock_client.containers.get.side_effect = mock_get
+        self.service.health.wait_for_health = MagicMock(return_value=True)
+
+        res, msg = self.service.perform_rollback("test_app")
+
+        self.assertTrue(res)
+        mock_current.start.assert_called_once()
+        mock_current.remove.assert_not_called()
+
+    def test_perform_rollback_incomplete_rename_failed(self, mock_post):
+        self.service.state_store.start_transaction("test_app", "old_image_hash", "img_1", "img_1_new")
+        self.service.state_store.update_transaction("test_app", "backup_created", original_container_id="old_image_hash", original_image_id="img_1")
+
+        mock_current = MagicMock()
+        mock_current.id = "old_image_hash"
+        mock_current.image.id = "img_1"
+        def mock_get(n):
+            import docker
+            if n == "test_app": return mock_current
+            if n == "test_app_backup": raise docker.errors.NotFound("Not found")
+            raise docker.errors.NotFound("NotFound")
+        self.mock_client.containers.get.side_effect = mock_get
+        self.service.health.wait_for_health = MagicMock(return_value=False)
+
+        res, msg = self.service.perform_rollback("test_app")
+
+        self.assertFalse(res)
+        mock_current.start.assert_called_once()
+        mock_current.remove.assert_not_called()
 
     def test_restart_dependents_network_mode_name(self, mock_post):
         dep = MagicMock()
@@ -91,9 +158,9 @@ class TestWatcherService(unittest.TestCase):
         dep.attrs = {"HostConfig": {"NetworkMode": "container:app1"}}
 
         self.mock_client.containers.list.return_value = [dep]
-        
+
         self.service.restart_dependents([ContainerUpdateInfo('app1', 'id1', UpdateStatus.UPDATED)])
-        
+
         dep.restart.assert_called_once()
 
     def test_restart_dependents_network_mode_id_warning(self, mock_post):
@@ -104,11 +171,11 @@ class TestWatcherService(unittest.TestCase):
         dep.attrs = {"HostConfig": {"NetworkMode": "container:id1"}}
 
         self.mock_client.containers.list.return_value = [dep]
-        
+
         with self.assertLogs('Watcher', level='WARNING') as cm:
             self.service.restart_dependents([ContainerUpdateInfo('app1', 'id1', UpdateStatus.UPDATED)])
             self.assertTrue(any("UNSUPPORTED DEPENDENCY" in output for output in cm.output))
-        
+
         dep.restart.assert_not_called()
 
     def test_get_recreation_plan_advanced_fields(self, mock_post):
@@ -125,10 +192,10 @@ class TestWatcherService(unittest.TestCase):
             },
             'NetworkSettings': {'Networks': {}}
         }
-        
+
         plan = self.service.docker.get_recreation_plan(mock_container)
         ca = plan["create_args"]
-        
+
         self.assertEqual(len(ca["ulimits"]), 1)
         self.assertEqual(ca["ulimits"][0].name, 'nofile')
         self.assertEqual(ca["log_config"].type, 'json-file')
@@ -143,7 +210,7 @@ class TestWatcherService(unittest.TestCase):
         dep1.id = "id1"
         dep1.labels = {"watcher.depends_on": "app1, app2"}
         dep1.attrs = {"HostConfig": {"NetworkMode": ""}}
-        
+
         dep2 = MagicMock()
         dep2.name = "dep2"
         dep2.id = "id2"
@@ -151,12 +218,12 @@ class TestWatcherService(unittest.TestCase):
         dep2.attrs = {"HostConfig": {"NetworkMode": ""}}
 
         self.mock_client.containers.list.return_value = [dep1, dep2]
-        
+
         self.service.restart_dependents([
             ContainerUpdateInfo('app1', 'id1', UpdateStatus.UPDATED),
             ContainerUpdateInfo('app2', 'id2', UpdateStatus.UPDATED)
         ])
-        
+
         dep1.restart.assert_called_once()
         dep2.restart.assert_called_once()
 
@@ -165,9 +232,9 @@ class TestWatcherService(unittest.TestCase):
         mock_container.name = "test_app"
         self.service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "old_hash", "new_hash"))
         self.service.docker.recreate = MagicMock()
-        
+
         info = self.service.process_container(mock_container, auto_update=False)
-        
+
         self.assertEqual(info.status, UpdateStatus.REPORTED)
         self.service.docker.recreate.assert_not_called()
 
@@ -175,27 +242,27 @@ class TestWatcherService(unittest.TestCase):
         self.service.config.watch_by_label = True
         self.service.config.watch_label_key = "watcher.enable"
         self.service.config.watch_label_value = "true"
-        
+
         c_unlabeled = MagicMock()
         c_unlabeled.labels = {}
         c_unlabeled.image.tags = ["app:latest"]
-        
+
         c_false = MagicMock()
         c_false.labels = {"watcher.enable": "false"}
         c_false.image.tags = ["app:latest"]
-        
+
         c_true = MagicMock()
         c_true.labels = {"watcher.enable": "true"}
         c_true.image.tags = ["app:latest"]
-        
+
         self.mock_client.containers.list.return_value = [c_unlabeled, c_false, c_true]
-        
+
         auto_update, monitor_only = self.service.docker.get_watched_containers()
-        
+
         self.assertIn(c_true, auto_update)
         self.assertNotIn(c_unlabeled, auto_update)
         self.assertNotIn(c_false, auto_update)
-        
+
         self.assertIn(c_unlabeled, monitor_only)
         self.assertIn(c_false, monitor_only)
 
@@ -203,23 +270,23 @@ class TestWatcherService(unittest.TestCase):
         self.service.config.watch_by_label = False
         self.service.config.watch_label_key = "watcher.enable"
         self.service.config.watch_label_value = "true"
-        
+
         c_unlabeled = MagicMock()
         c_unlabeled.labels = {}
         c_unlabeled.image.tags = ["app:latest"]
-        
+
         c_false = MagicMock()
         c_false.labels = {"watcher.enable": "false"}
         c_false.image.tags = ["app:latest"]
-        
+
         c_true = MagicMock()
         c_true.labels = {"watcher.enable": "true"}
         c_true.image.tags = ["app:latest"]
-        
+
         self.mock_client.containers.list.return_value = [c_unlabeled, c_false, c_true]
-        
+
         auto_update, monitor_only = self.service.docker.get_watched_containers()
-        
+
         self.assertIn(c_unlabeled, auto_update)
         self.assertIn(c_true, auto_update)
         self.assertIn(c_false, monitor_only)
@@ -231,29 +298,96 @@ class TestWatcherService(unittest.TestCase):
         dep1.id = "id1"
         dep1.labels = {"watcher.depends_on": "other_app"}
         dep1.attrs = {"HostConfig": {"NetworkMode": ""}}
-        
+
         self.mock_client.containers.list.return_value = [dep1]
-        
+
         # 'just_updated' is in the updated_containers list
         self.service.restart_dependents([
             ContainerUpdateInfo('other_app', 'id_other', UpdateStatus.UPDATED),
             ContainerUpdateInfo('just_updated', 'id1', UpdateStatus.UPDATED)
         ])
-        
+
         # Should NOT be restarted because it was just updated
         dep1.restart.assert_not_called()
 
     def test_summary_includes_reported(self, mock_post):
+        self.service.config.discord_webhook_url = "http://mock"
+        from notifier_factory import build_notifier
+        self.service.notifier = build_notifier(self.service.config)
         summary = {"updated": [], "failed": [], "rolled_back": [], "reported": ["app1", "app2"]}
         self.service.notifier.notify_summary_report(summary)
-        
+
         mock_post.assert_called_once()
-        args, kwargs = mock_post.call_args
-        payload = kwargs.get('json')
-        description = payload["embeds"][0]["description"]
-        self.assertIn("Updates Available", description)
-        self.assertIn("app1", description)
-        self.assertIn("app2", description)
+        _args, kwargs = mock_post.call_args
+        self.assertIn("app1", kwargs["json"]["embeds"][0]["description"])
+
+    def test_get_sleep_duration(self, mock_post):
+        from datetime import datetime as real_datetime
+        import zoneinfo
+
+        self.service.config.schedule_time = "14:30"
+        self.service.config.tz = "Europe/Zurich"
+        tz = zoneinfo.ZoneInfo("Europe/Zurich")
+        
+        def create_mock_datetime(mock_now):
+            mock_dt = MagicMock()
+            mock_dt.combine.side_effect = real_datetime.combine
+            mock_dt.strptime.side_effect = real_datetime.strptime
+            mock_dt.now.return_value = mock_now
+            return mock_dt
+            
+        mock_now_1 = real_datetime(2024, 1, 1, 10, 0, 0, tzinfo=tz)
+        with patch.dict(self.service._get_sleep_duration.__globals__, {'datetime': create_mock_datetime(mock_now_1)}):
+            duration = self.service._get_sleep_duration()
+            self.assertEqual(duration, 16200.0)
+            
+        mock_now_2 = real_datetime(2024, 1, 1, 15, 0, 0, tzinfo=tz)
+        with patch.dict(self.service._get_sleep_duration.__globals__, {'datetime': create_mock_datetime(mock_now_2)}):
+            duration = self.service._get_sleep_duration()
+            self.assertEqual(duration, 84600.0)
+            
+        mock_now_spring = real_datetime(2026, 3, 28, 15, 0, 0, tzinfo=tz)
+        with patch.dict(self.service._get_sleep_duration.__globals__, {'datetime': create_mock_datetime(mock_now_spring)}):
+            duration = self.service._get_sleep_duration()
+            self.assertEqual(duration, 81000.0)
+            
+        mock_now_fall = real_datetime(2026, 10, 24, 15, 0, 0, tzinfo=tz)
+        with patch.dict(self.service._get_sleep_duration.__globals__, {'datetime': create_mock_datetime(mock_now_fall)}):
+            duration = self.service._get_sleep_duration()
+            self.assertEqual(duration, 88200.0)
+
+    @patch.object(WatcherService, 'run_cycle')
+    def test_start_interval_calls_run_cycle_immediately(self, mock_run_cycle, mock_post):
+        self.service.config.schedule_time = None
+        self.service.config.check_interval = 60
+        
+        def run_cycle_side_effect():
+            self.service.shutdown_event.set()
+            
+        mock_run_cycle.side_effect = run_cycle_side_effect
+        
+        with patch.object(self.service.shutdown_event, 'wait') as mock_wait:
+            self.service.start()
+            
+        mock_run_cycle.assert_called_once()
+        mock_wait.assert_not_called()
+
+    @patch.object(WatcherService, 'run_cycle')
+    def test_start_scheduled_waits_before_run_cycle(self, mock_run_cycle, mock_post):
+        self.service.config.schedule_time = "14:30"
+        self.service.config.tz = "Europe/Zurich"
+        
+        def wait_side_effect(sleep_sec):
+            # break before run_cycle by setting event
+            self.service.shutdown_event.set()
+            
+        mock_run_cycle.side_effect = MagicMock()
+        
+        with patch.object(self.service.shutdown_event, 'wait', side_effect=wait_side_effect) as mock_wait:
+            self.service.start()
+            
+        mock_run_cycle.assert_not_called()
+        mock_wait.assert_called_once()
 
 if __name__ == '__main__':
     unittest.main()

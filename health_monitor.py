@@ -1,13 +1,22 @@
 import logging
 import time
+
 import docker
 
 logger = logging.getLogger('Watcher.Health')
 
 class HealthMonitor:
     """Verifies container stability using Docker status and healthchecks."""
-    def __init__(self, client: docker.DockerClient):
+    def __init__(self, client: docker.DockerClient, shutdown_event=None):
         self.client = client
+        self.shutdown_event = shutdown_event
+
+    def _sleep(self, seconds: float) -> bool:
+        """Interruptible sleep. Returns False if shutdown was requested during sleep."""
+        if self.shutdown_event:
+            return not self.shutdown_event.wait(seconds)
+        time.sleep(seconds)
+        return True
 
     def is_healthy(self, name: str) -> bool:
         """Single check of the current health state."""
@@ -24,14 +33,10 @@ class HealthMonitor:
                 return False
             
             # If Docker healthcheck exists, it must not be unhealthy or starting
-            if health != 'none':
-                if health in ('unhealthy', 'starting'): 
-                    return False
-            
-            return True
+            return not (health != 'none' and health in ('unhealthy', 'starting'))
         except docker.errors.NotFound:
             return False
-        except Exception as e:
+        except Exception as e: # noqa: BLE001
             logger.debug(f"Error checking health state for {name}: {e}")
             return False
 
@@ -45,17 +50,34 @@ class HealthMonitor:
         
         logger.info(f"Verifying health for {name} (Stability: {required_successes} successful checks required)...")
         
-        # Check if container has a native healthcheck
+        # Check if container has a native healthcheck and start_period
+        start_period_applied = False
         try:
             c = self.client.containers.get(name)
+            labels = c.labels or {}
+            start_period = labels.get('watcher.health.start_period')
+            if start_period:
+                try:
+                    sp_sec = int(start_period)
+                    if sp_sec < 0:
+                        logger.warning(f"Invalid start_period {sp_sec} for {name}. Must be >= 0.")
+                    else:
+                        logger.info(f"Container {name} has start_period={sp_sec}s label. Waiting...")
+                        if not self._sleep(sp_sec): return False
+                        start_period_applied = True
+                except ValueError:
+                    logger.warning(f"Invalid start_period '{start_period}' for {name}. Must be an integer >= 0.")
+            
             if c.attrs.get('State', {}).get('Health', {}).get('Status', 'none') == 'none':
                 logger.warning(f"Container {name} has no native Docker healthcheck. Stability check will only verify 'running' state.")
-        except: pass
+        except Exception as e: # noqa: BLE001
+            logger.debug(f"Failed to inspect health details for {name}: {e}")
 
-        # Initial wait for container startup
-        time.sleep(2)
+        # Initial wait for container startup if no custom start period handled it
+        if not start_period_applied and not self._sleep(2): return False
 
-        for i in range(max(1, retries)):
+        max_retries = max(1, retries)
+        for i in range(max_retries):
             if self.is_healthy(name):
                 consecutive_successes += 1
                 if consecutive_successes >= required_successes:
@@ -64,8 +86,10 @@ class HealthMonitor:
                 logger.debug(f"Stability check {consecutive_successes}/{required_successes} passed.")
             else:
                 consecutive_successes = 0
-                logger.info(f"Check {i+1}/{retries} for {name} failed or starting. Retrying in {delay}s...")
+                logger.info(f"Check {i+1}/{max_retries} for {name} failed or starting.")
+                if i < max_retries - 1:
+                    logger.info(f"Retrying in {delay}s...")
             
-            time.sleep(delay)
+            if i < max_retries - 1 and not self._sleep(delay): return False
             
         return False
