@@ -74,12 +74,25 @@ class WatcherService:
         except Exception:  # noqa: BLE001
             self_id = None
 
+        marked_containers = []
         for c in self.client.containers.list():
-            if c.id == self_id:
+            if self_id and c.id == self_id:
                 continue
             labels = c.labels or {}
             if labels.get("watcher.self") == "true":
-                logger.critical(f"Multiple Watcher instances detected! Container {c.name} is also marked with watcher.self=true. Refusing to start.")
+                marked_containers.append(c)
+                
+        if self_id:
+            if marked_containers:
+                logger.critical(f"Multiple Watcher instances detected! Container {marked_containers[0].name} is also marked with watcher.self=true. Refusing to start.")
+                sys.exit(1)
+        else:
+            if not marked_containers:
+                logger.warning("Could not identify self container and found no container marked with watcher.self=true. Ensure watcher.self=true is set on this container.")
+            elif len(marked_containers) == 1:
+                logger.info("Self-ID detection failed, but found exactly one container marked with watcher.self=true. Assuming this is the current instance.")
+            else:
+                logger.critical(f"Multiple Watcher instances detected! Found {len(marked_containers)} containers marked with watcher.self=true. Refusing to start.")
                 sys.exit(1)
 
     def _setup_signals(self):
@@ -394,7 +407,9 @@ class WatcherService:
 
             if current_container and current_container.id == original_container_id and current_container.image.id == original_image_id:
                 logger.info(f"Original container {name} is still in place. Verifying it...")
-                current_container.start()
+                current_container.reload()
+                if current_container.status != "running":
+                    current_container.start()
                 if self.health.wait_for_health(name, self.config.health_check_retries, self.config.health_check_delay):
                     msg = "Original container recovered successfully."
                     self.notifier.notify_rollback(name, "success", msg)
@@ -423,7 +438,8 @@ class WatcherService:
 
             if current_container:
                 if not new_container_id and tx.get("planned_new_image_id"):
-                    if current_container.image.id == tx.get("planned_new_image_id") and current_container.labels.get("watcher.transaction_id") == tx.get("transaction_id"):
+                    labels = current_container.labels or {}
+                    if current_container.image.id == tx.get("planned_new_image_id") and labels.get("watcher.transaction_id") == tx.get("transaction_id"):
                         new_container_id = current_container.id
                 
                 if new_container_id and current_container.id == new_container_id:

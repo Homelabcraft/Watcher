@@ -37,11 +37,13 @@ While tools like Watchtower are great for blindly pulling and restarting contain
 Get Watcher running in under 60 seconds.
 
 ### 1. Deployment
+> ⚠️ **Security Warning:** Watcher requires access to the Docker socket (`/var/run/docker.sock`) to manage containers. This grants it root-level privileges on the host system. Only deploy Watcher on trusted networks and secure your server.
+
 ```bash
 git clone https://github.com/Homelabcraft/Watcher.git
 cd Watcher
 cp .env.example .env
-# Edit .env with your Discord/Slack/Telegram/Ntfy webhook URL
+# Edit .env with your optional Discord/Slack/Telegram/Ntfy webhook URL
 docker compose up -d
 ```
 
@@ -49,16 +51,16 @@ docker compose up -d
 Add these labels to the containers you want to manage:
 ```yaml
 services:
-  database:
-    image: postgres:latest
+  cache:
+    image: redis:latest
     labels:
-      - "watcher.enable=true" # Monitor only: Receive alerts if updates exist, but don't auto-update.
+      - "watcher.enable=true" # Auto-update: Watcher will automatically pull new images and recreate this container.
 
   web-app:
-    image: my-app:latest
+    image: nginx:latest
     labels:
-      - "watcher.enable=true"  # Auto-update: Full lifecycle management.
-      - "watcher.depends_on=database" # Restarts this container if 'database' is updated.
+      - "watcher.enable=true"  # Auto-update: Watcher will automatically pull new images and recreate this container.
+      - "watcher.depends_on=cache" # Restarts this container if 'cache' is updated.
 ```
 
 ---

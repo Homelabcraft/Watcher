@@ -322,22 +322,64 @@ class TestWatcherService(BaseTest):
         self.assertIn("app1", kwargs["json"]["embeds"][0]["description"])
 
     def test_get_sleep_duration(self, mock_post):
-        from datetime import datetime, timedelta
+        from datetime import datetime as real_datetime
         import zoneinfo
 
         self.service.config.schedule_time = "14:30"
         self.service.config.tz = "Europe/Zurich"
         
         tz = zoneinfo.ZoneInfo("Europe/Zurich")
-        now = datetime.now(tz)
-        target_time = datetime.strptime("14:30", "%H:%M").time()
-        target_dt = datetime.combine(now.date(), target_time).replace(tzinfo=tz)
-        if now >= target_dt:
-            target_dt += timedelta(days=1)
-        expected_duration = (target_dt - now).total_seconds()
         
-        duration = self.service._get_sleep_duration()
-        self.assertAlmostEqual(duration, expected_duration, delta=2.0)
+        class PatchedDatetime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return real_datetime(2024, 1, 1, 10, 0, 0, tzinfo=tz)
+                
+        with patch('main.datetime', PatchedDatetime):
+            duration = self.service._get_sleep_duration()
+            self.assertEqual(duration, 16200.0)
+            
+        class PatchedDatetime2(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return real_datetime(2024, 1, 1, 15, 0, 0, tzinfo=tz)
+                
+        with patch('main.datetime', PatchedDatetime2):
+            duration = self.service._get_sleep_duration()
+            self.assertEqual(duration, 84600.0)
+
+    @patch.object(WatcherService, 'run_cycle')
+    def test_start_interval_calls_run_cycle_immediately(self, mock_run_cycle, mock_post):
+        self.service.config.schedule_time = None
+        self.service.config.check_interval = 60
+        
+        def run_cycle_side_effect():
+            self.service.shutdown_event.set()
+            
+        mock_run_cycle.side_effect = run_cycle_side_effect
+        
+        with patch.object(self.service.shutdown_event, 'wait') as mock_wait:
+            self.service.start()
+            
+        mock_run_cycle.assert_called_once()
+        mock_wait.assert_not_called()
+
+    @patch.object(WatcherService, 'run_cycle')
+    def test_start_scheduled_waits_before_run_cycle(self, mock_run_cycle, mock_post):
+        self.service.config.schedule_time = "14:30"
+        self.service.config.tz = "Europe/Zurich"
+        
+        def wait_side_effect(sleep_sec):
+            # break before run_cycle by setting event
+            self.service.shutdown_event.set()
+            
+        mock_run_cycle.side_effect = MagicMock()
+        
+        with patch.object(self.service.shutdown_event, 'wait', side_effect=wait_side_effect) as mock_wait:
+            self.service.start()
+            
+        mock_run_cycle.assert_not_called()
+        mock_wait.assert_called_once()
 
 if __name__ == '__main__':
     unittest.main()

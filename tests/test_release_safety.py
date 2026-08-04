@@ -196,10 +196,16 @@ class TestReleaseSafety(BaseTest):
         from models import UpdateStatus
         self.service.docker.get_recreation_plan = MagicMock(return_value=MagicMock())
         self.service.docker.check_for_update = MagicMock(return_value=(UpdateStatus.UPDATE_AVAILABLE, "old_image", "new_img_456"))
+        self.service.docker.recreate = MagicMock()
+        self.service.state_store.start_transaction = MagicMock()
 
         info = self.service.process_container(c, True)
         self.assertEqual(info.status, UpdateStatus.FAILED)
         self.assertEqual(info.error_step, "dependency_check")
+        
+        self.mock_client.containers.list.assert_called_with(all=True)
+        self.service.docker.recreate.assert_not_called()
+        self.service.state_store.start_transaction.assert_not_called()
 
     # 6. Stop timeout
     @patch('time.sleep', return_value=None)
@@ -276,36 +282,53 @@ class TestReleaseSafety(BaseTest):
         self.assertNotEqual(info.status, UpdateStatus.UPDATED)
 
     # Single instance
-    def test_single_instance_another_self_blocks(self):
+    def test_single_instance_known_self_rejects_other(self):
         me = MagicMock()
         me.id = "me_123"
         other = MagicMock()
         other.id = "other_456"
         other.labels = {"watcher.self": "true"}
-        other.status = "running"
 
-        self.mock_client.containers.list.return_value = [other]
+        self.mock_client.containers.list.return_value = [other, me]
         self.mock_client.containers.get.return_value = me
         
         with self.assertRaises(SystemExit):
             self.service._check_single_instance()
 
-    def test_single_instance_custom_failure_safe(self):
-        # failure to detect self ID doesn't crash but warns/handles gracefully if we are the only one
-        other = MagicMock()
-        other.id = "other_456"
-        other.labels = {"watcher.self": "true"}
-        other.status = "running"
-        
-        me = MagicMock()
-        me.id = "me_123"
-        me.labels = {"watcher.self": "true"}
-        me.status = "running"
-        
-        self.mock_client.containers.list.return_value = [other, me]
+    def test_single_instance_unknown_self_zero_marked(self):
         import docker
         self.mock_client.containers.get.side_effect = docker.errors.NotFound("Not found")
+        self.mock_client.containers.list.return_value = []
+        
+        # Should warn but not exit
+        self.service._check_single_instance()
 
+    def test_single_instance_unknown_self_exactly_one_marked(self):
+        import docker
+        self.mock_client.containers.get.side_effect = docker.errors.NotFound("Not found")
+        
+        marked = MagicMock()
+        marked.id = "me_123"
+        marked.labels = {"watcher.self": "true"}
+        self.mock_client.containers.list.return_value = [marked]
+        
+        # Should info but not exit
+        self.service._check_single_instance()
+
+    def test_single_instance_unknown_self_multiple_marked(self):
+        import docker
+        self.mock_client.containers.get.side_effect = docker.errors.NotFound("Not found")
+        
+        m1 = MagicMock()
+        m1.id = "me_1"
+        m1.labels = {"watcher.self": "true"}
+        m2 = MagicMock()
+        m2.id = "me_2"
+        m2.labels = {"watcher.self": "true"}
+        
+        self.mock_client.containers.list.return_value = [m1, m2]
+        
+        # Should exit
         with self.assertRaises(SystemExit):
             self.service._check_single_instance()
 

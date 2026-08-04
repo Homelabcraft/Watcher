@@ -126,42 +126,26 @@ class TestJournalAndNotifications(BaseTest):
                 del os.environ["JOURNAL_PATH"]
 
     def test_summary_strategies(self):
-        """Test always, on_change, and on_error strategies."""
-        # Setup
+        """Test always, on_change, and on_error strategies with empty cycle."""
         service = WatcherService()
         service.notifier.notify_summary_report = MagicMock()
-        
-        # 1. Strategy: on_error, but only 'reported' exists -> No notification
-        service.config.notify_summary_strategy = "on_error"
-        summary = {"updated": [], "failed": [], "rolled_back": [], "reported": ["app1"], "skipped": []}
-        
-        # Need to patch run_cycle's container list
         service.docker.get_watched_containers = MagicMock(return_value=([], []))
         
-        # Manual trigger of end-of-cycle logic logic
-        def check_strategy(summ):
-            should = False
-            strat = service.config.notify_summary_strategy
-            
-            has_errors = len(summ["failed"]) > 0 or len(summ["rolled_back"]) > 0
-            has_actions = len(summ["updated"]) > 0 or has_errors
-            
-            if strat == "always": should = True
-            elif strat == "on_error": should = has_errors
-            elif strat == "on_change": should = has_actions
-            return should
-
-        self.assertFalse(check_strategy(summary))
+        # Test always -> Yes notification
+        service.config.notify_summary_strategy = "always"
+        service.run_cycle()
+        service.notifier.notify_summary_report.assert_called_once()
+        service.notifier.notify_summary_report.reset_mock()
         
-        # 2. Strategy: on_change, updated exists -> Yes notification
+        # Test on_change -> No notification
         service.config.notify_summary_strategy = "on_change"
-        summary["updated"] = ["app2"]
-        self.assertTrue(check_strategy(summary))
+        service.run_cycle()
+        service.notifier.notify_summary_report.assert_not_called()
         
-        # 3. Strategy: on_change, only reported exists -> No notification (Decision: change = action taken)
-        summary["updated"] = []
-        summary["reported"] = ["app3"]
-        self.assertFalse(check_strategy(summary))
+        # Test on_error -> No notification
+        service.config.notify_summary_strategy = "on_error"
+        service.run_cycle()
+        service.notifier.notify_summary_report.assert_not_called()
 
     def test_run_cycle_no_notifications(self):
         """A full cycle should run without errors even if notifications are disabled."""
