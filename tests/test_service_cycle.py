@@ -336,8 +336,6 @@ class TestWatcherService(BaseTest):
             mock_dt.now.return_value = mock_now
             return mock_dt
             
-        import sys
-        
         mock_now_1 = real_datetime(2024, 1, 1, 10, 0, 0, tzinfo=tz)
         with patch.dict(self.service._get_sleep_duration.__globals__, {'datetime': create_mock_datetime(mock_now_1)}):
             duration = self.service._get_sleep_duration()
