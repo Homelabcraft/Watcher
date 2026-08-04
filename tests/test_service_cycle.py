@@ -327,26 +327,36 @@ class TestWatcherService(BaseTest):
 
         self.service.config.schedule_time = "14:30"
         self.service.config.tz = "Europe/Zurich"
-        
         tz = zoneinfo.ZoneInfo("Europe/Zurich")
         
-        class PatchedDatetime(real_datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return real_datetime(2024, 1, 1, 10, 0, 0, tzinfo=tz)
-                
-        with patch('main.datetime', PatchedDatetime):
+        def create_mock_datetime(mock_now):
+            mock_dt = MagicMock()
+            mock_dt.combine.side_effect = real_datetime.combine
+            mock_dt.strptime.side_effect = real_datetime.strptime
+            mock_dt.now.return_value = mock_now
+            return mock_dt
+            
+        import sys
+        
+        mock_now_1 = real_datetime(2024, 1, 1, 10, 0, 0, tzinfo=tz)
+        with patch.dict(self.service._get_sleep_duration.__globals__, {'datetime': create_mock_datetime(mock_now_1)}):
             duration = self.service._get_sleep_duration()
             self.assertEqual(duration, 16200.0)
             
-        class PatchedDatetime2(real_datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return real_datetime(2024, 1, 1, 15, 0, 0, tzinfo=tz)
-                
-        with patch('main.datetime', PatchedDatetime2):
+        mock_now_2 = real_datetime(2024, 1, 1, 15, 0, 0, tzinfo=tz)
+        with patch.dict(self.service._get_sleep_duration.__globals__, {'datetime': create_mock_datetime(mock_now_2)}):
             duration = self.service._get_sleep_duration()
             self.assertEqual(duration, 84600.0)
+            
+        mock_now_spring = real_datetime(2026, 3, 28, 15, 0, 0, tzinfo=tz)
+        with patch.dict(self.service._get_sleep_duration.__globals__, {'datetime': create_mock_datetime(mock_now_spring)}):
+            duration = self.service._get_sleep_duration()
+            self.assertEqual(duration, 81000.0)
+            
+        mock_now_fall = real_datetime(2026, 10, 24, 15, 0, 0, tzinfo=tz)
+        with patch.dict(self.service._get_sleep_duration.__globals__, {'datetime': create_mock_datetime(mock_now_fall)}):
+            duration = self.service._get_sleep_duration()
+            self.assertEqual(duration, 88200.0)
 
     @patch.object(WatcherService, 'run_cycle')
     def test_start_interval_calls_run_cycle_immediately(self, mock_run_cycle, mock_post):

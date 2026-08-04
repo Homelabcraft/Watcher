@@ -379,8 +379,6 @@ class WatcherService:
             # 1. Inspect current container under target name
             backup_name = f"{name}_backup"
             
-            backup_name = f"{name}_backup"
-            
             current_container = None
             try:
                 current_container = self.client.containers.get(name)
@@ -571,7 +569,7 @@ class WatcherService:
         if now >= target_dt:
             target_dt += timedelta(days=1)
 
-        return (target_dt - now).total_seconds()
+        return target_dt.timestamp() - now.timestamp()
 
     def startup_recovery(self):
         """Resolves aborted updates using StateStore transactions."""
@@ -854,7 +852,10 @@ class WatcherService:
                 if self.config.schedule_time and first_run:
                     first_run = False
                     sleep_sec = self._get_sleep_duration()
-                    next_run = (datetime.now() + timedelta(seconds=sleep_sec)).strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005
+                    import zoneinfo
+                    tz = zoneinfo.ZoneInfo(self.config.tz)
+                    now = datetime.now(tz)
+                    next_run = datetime.fromtimestamp(now.timestamp() + sleep_sec, tz).strftime("%Y-%m-%d %H:%M:%S")
                     logger.info(f"Scheduled mode: Sleeping until first run at {next_run}...")
                     self.shutdown_event.wait(sleep_sec)
                     if self.shutdown_event.is_set():
@@ -867,7 +868,10 @@ class WatcherService:
 
                 sleep_sec = self._get_sleep_duration()
                 if self.config.schedule_time:
-                    next_run = (datetime.now() + timedelta(seconds=sleep_sec)).strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005
+                    import zoneinfo
+                    tz = zoneinfo.ZoneInfo(self.config.tz)
+                    now = datetime.now(tz)
+                    next_run = datetime.fromtimestamp(now.timestamp() + sleep_sec, tz).strftime("%Y-%m-%d %H:%M:%S")
                     logger.info(f"Sleeping until next scheduled run at {next_run}...")
 
                 self.shutdown_event.wait(sleep_sec)
