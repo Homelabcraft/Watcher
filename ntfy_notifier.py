@@ -98,9 +98,11 @@ class NtfyNotifier:
         if summary["rolled_back"]:
             lines.append(f"Rolled back: {', '.join(summary['rolled_back'])}")
             
+        if summary.get("skipped"):
+            lines.append("Skipped (cooldown/update policy): " + ", ".join(format_info(name) for name in summary["skipped"]))
         if summary.get("interrupted"):
             lines.append("Interrupted (shutdown; verification deferred): " + ", ".join(summary["interrupted"]))
-        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported") and not summary.get("interrupted"):
+        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported") and not summary.get("interrupted") and not summary.get("skipped"):
             lines.append("No updates or errors detected.")
 
         self._send(f"Watcher Scan Summary ({duration_sec:.1f}s)", "\n".join(lines), tags=["bar_chart"])

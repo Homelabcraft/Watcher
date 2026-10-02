@@ -12,12 +12,19 @@ from docker.models.containers import Container
 
 from config import Config
 from docker_handler import DockerHandler
-from exceptions import ConfigurationError, RecreationError, StateStoreError
+from exceptions import (
+    ConfigurationError,
+    ImageRecreationError,
+    RecreationError,
+    StateStoreError,
+    UpdateWindowClosed,
+)
 from health_monitor import HealthMonitor
 from journal import Journal
 from models import ContainerUpdateInfo, ExecutionPlan, UpdateStatus
 from notifier_factory import build_notifier
 from state_store import StateStore
+from update_window import UpdateWindow
 
 # Logger setup
 logging.basicConfig(
@@ -129,6 +136,30 @@ class WatcherService:
 
         return False
 
+    def _update_window(self) -> UpdateWindow:
+        return UpdateWindow(self.config.update_window_start, self.config.update_window_end, self.config.tz)
+
+    def _defer_outside_window(self, info: ContainerUpdateInfo) -> bool:
+        if self._update_window().is_open():
+            return False
+        info.status = UpdateStatus.SKIPPED_WINDOW
+        info.error_step = "update_window"
+        info.error_message = "No new update outside the configured local update window."
+        logger.info(f"Deferring {info.name}: update window is closed.")
+        return True
+
+    def _clear_failure(self, name: str, keep_failed_image: bool = False):
+        if name not in self.failure_tracker:
+            return
+        new_tracker = copy.deepcopy(self.failure_tracker)
+        if keep_failed_image and new_tracker[name].get("failed_image_id"):
+            new_tracker[name]["count"] = 0
+            new_tracker[name]["cooldown_until"] = datetime.min.replace(tzinfo=timezone.utc)
+        else:
+            del new_tracker[name]
+        if new_tracker != self.failure_tracker:
+            self._update_cooldowns_persistently(new_tracker, name)
+
     def process_container(self, container: Container, auto_update: bool) -> ContainerUpdateInfo:
         """Standard production update lifecycle with rename backup protection."""
         name = container.name
@@ -136,11 +167,14 @@ class WatcherService:
         old_image_id = container.image.id
         ref = self.docker.get_image_ref(container)
         recreate_started = False
+        new_img = None
         start_time = time.perf_counter()
 
         info = ContainerUpdateInfo(name=name, old_id=old_id, status=UpdateStatus.FAILED, image_ref=ref)
 
         try:
+            if auto_update and self._defer_outside_window(info):
+                return info
             # Check for pending transaction
             if name in self.state_store.get_transactions():
                 logger.warning(f"Pending transaction exists for {name}. Skipping update. Manual intervention or recovery may be required.")
@@ -164,11 +198,8 @@ class WatcherService:
             if status == UpdateStatus.NO_UPDATE:
                 info.status = UpdateStatus.NO_UPDATE
                 info.error_step = None
-                # Success/No-change clears the failure tracker
-                if name in self.failure_tracker:
-                    new_tracker = copy.deepcopy(self.failure_tracker)
-                    del new_tracker[name]
-                    self._update_cooldowns_persistently(new_tracker, name)
+                # Clear transient failures without forgetting a rejected image.
+                self._clear_failure(name, keep_failed_image=True)
                 return info
             if status == UpdateStatus.FAILED:
                 logger.error(f"Update check failed for {name}")
@@ -184,6 +215,16 @@ class WatcherService:
                 info.error_step = None
                 return info
 
+            tracker = self.failure_tracker.get(name, {})
+            if (self.config.skip_failed_images and new_img
+                    and tracker.get("failed_image_id") == new_img
+                    and tracker.get("failed_image_ref") == ref):
+                info.status = UpdateStatus.SKIPPED_FAILED_IMAGE
+                info.error_step = "failed_image_policy"
+                info.error_message = "This image previously failed image compatibility or health verification; waiting for a different image."
+                logger.info(f"Skipping previously failed image for {name}: {info.new_image_short_id}")
+                return info
+
             # Dry Run: Record UPDATE_AVAILABLE but stop execution
             if self.config.dry_run:
                 logger.info(f"[DRY] Update available for {name} ({info.old_image_short_id} -> {info.new_image_short_id})")
@@ -193,6 +234,9 @@ class WatcherService:
 
             if self.shutdown_event.is_set():
                 return self._interrupt_update(info, start_time)
+
+            if self._defer_outside_window(info):
+                return info
 
             # 2. State Capture
             info.error_step = "state_capture"
@@ -218,9 +262,12 @@ class WatcherService:
             if self.shutdown_event.is_set():
                 return self._interrupt_update(info, start_time)
 
+            if self._defer_outside_window(info):
+                return info
+
             # 3. Execution
             try:
-                transaction_id = self.state_store.start_transaction(name, old_id, old_image_id, new_img)
+                transaction_id = self.state_store.start_transaction(name, old_id, old_image_id, new_img, image_ref=ref)
             except StateStoreError as e:
                 self.abort_updates_for_cycle = True
                 logger.error(f"StateStoreError during start_transaction for {name}: {e}")
@@ -235,6 +282,10 @@ class WatcherService:
             logger.info(f"Updating {name}...")
             if self.config.notify_on_update_start:
                 self.notifier.notify_update_started(name, ref, info.old_image_short_id, info.new_image_short_id, current_status, dependents)
+
+            if self._defer_outside_window(info):
+                self.state_store.end_transaction(name)
+                return info
 
             recreate_started = True
             new_container = self.docker.recreate(name, plan, self.state_store, transaction_id=transaction_id)
@@ -291,10 +342,7 @@ class WatcherService:
                 self.notifier.notify_update_success(info)
 
                 # Success clears the failure tracker
-                if name in self.failure_tracker:
-                    new_tracker = copy.deepcopy(self.failure_tracker)
-                    del new_tracker[name]
-                    self._update_cooldowns_persistently(new_tracker, name)
+                self._clear_failure(name)
 
                 return info
             else:
@@ -306,18 +354,34 @@ class WatcherService:
                 info.error_step = "health_check"
                 info.rollback_attempted = True
 
-                # Do rollback
+                # Persist the rejected image before rollback can end the transaction.
+                self._record_failure(name, new_img, ref)
                 rb_success, rb_detail = self.perform_rollback(name)
                 info.rollback_success = rb_success
                 info.rollback_details = rb_detail
                 info.duration_sec = time.perf_counter() - start_time
                 self.notifier.notify_update_failure(info)
-                self._record_failure(name)
                 return info
 
+        except UpdateWindowClosed as e:
+            info.status = UpdateStatus.SKIPPED_WINDOW
+            info.error_step = "update_window"
+            info.error_message = str(e)
+            logger.info(f"Deferring {name}: {e}")
+            try:
+                self.state_store.end_transaction(name)
+            except StateStoreError as state_error:
+                self.abort_updates_for_cycle = True
+                info.status = UpdateStatus.FAILED
+                info.error_step = "state_save"
+                info.error_message = f"Could not cancel prepared transaction: {state_error}"
+                self.notifier.notify_update_failure(info)
+            return info
         except RecreationError as e:
             logger.error(f"Recreation failed for {name}: {e}")
             info.error_message = str(e)
+            rejected_image = new_img if recreate_started and isinstance(e, ImageRecreationError) else None
+            self._record_failure(name, rejected_image, ref)
 
             if recreate_started:
                 logger.info(f"Attempting rollback for {name} after recreation error...")
@@ -328,7 +392,6 @@ class WatcherService:
 
             info.duration_sec = time.perf_counter() - start_time
             self.notifier.notify_update_failure(info)
-            self._record_failure(name)
             return info
         except Exception as e:  # noqa: BLE001
             if isinstance(e, StateStoreError):
@@ -348,24 +411,29 @@ class WatcherService:
             self._record_failure(name)
             return info
 
-    def _record_failure(self, name: str):
+    def _record_failure(self, name: str, failed_image_id: str | None = None, image_ref: str | None = None):
         """Internal helper to increment failure count and set cooldown."""
         new_tracker = copy.deepcopy(self.failure_tracker)
         tracker = new_tracker.get(name, {"count": 0, "cooldown_until": datetime.min.replace(tzinfo=timezone.utc)})
         tracker["count"] += 1
         tracker["cooldown_until"] = datetime.now(timezone.utc) + timedelta(seconds=self.config.failure_cooldown_seconds)
+        if isinstance(failed_image_id, str) and isinstance(image_ref, str):
+            tracker["failed_image_id"] = failed_image_id
+            tracker["failed_image_ref"] = image_ref
         new_tracker[name] = tracker
-        self._update_cooldowns_persistently(new_tracker, name)
-        logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
+        if self._update_cooldowns_persistently(new_tracker, name):
+            logger.warning(f"Cooldown active for {name} until {tracker['cooldown_until']} (Fail count: {tracker['count']})")
 
-    def _update_cooldowns_persistently(self, new_tracker: dict, name: str):
+    def _update_cooldowns_persistently(self, new_tracker: dict, name: str) -> bool:
         try:
             self.state_store.set_cooldowns(new_tracker)
             self.failure_tracker = new_tracker
+            return True
         except Exception as e:  # noqa: BLE001
             if isinstance(e, StateStoreError):
                 self.abort_updates_for_cycle = True
             logger.error(f"Error setting cooldowns for {name}: {e}")
+            return False
 
     def _best_effort_update_tx(self, name: str, phase: str):
         try:
@@ -579,7 +647,7 @@ class WatcherService:
 
     def _get_sleep_duration(self) -> float:
         if not self.config.schedule_time:
-            return float(self.config.check_interval)
+            return self._update_window().sleep_duration(float(self.config.check_interval))
 
         import zoneinfo
         tz = zoneinfo.ZoneInfo(self.config.tz)
@@ -593,7 +661,8 @@ class WatcherService:
 
         target_dt = datetime.combine(now.date(), target_time).replace(tzinfo=tz)
 
-        if now >= target_dt:
+        # Wall-clock ordering is ambiguous during autumn's repeated hour.
+        if now.timestamp() >= target_dt.timestamp():
             target_dt += timedelta(days=1)
 
         return target_dt.timestamp() - now.timestamp()
@@ -709,6 +778,7 @@ class WatcherService:
                         logger.info(f"Recovery verification interrupted for {name}; retaining replacement, backup and transaction.")
                         return
                     logger.warning(f"New container {name} is unhealthy. Rolling back...")
+                    self._record_failure(name, new_image_id, tx.get("image_ref") or self.docker.get_image_ref(main_c))
                     if backup_c:
                         main_c.remove(force=True)
                         backup_c.rename(name)
@@ -758,6 +828,9 @@ class WatcherService:
             logger.error(f"Error processing recovery for {name}: {e}")
 
     def run_cycle(self):
+        if not self._update_window().is_open():
+            logger.info("Update window is closed; deferring scan until the next eligible run.")
+            return
         self.abort_updates_for_cycle = False
         cycle_start = time.perf_counter()
         logger.info("--- Cycle Start ---")
@@ -822,6 +895,8 @@ class WatcherService:
                     if attempt_update: update_count += 1
                 elif info.status == UpdateStatus.INTERRUPTED:
                     summary["interrupted"].append(info.name)
+                elif info.status in (UpdateStatus.SKIPPED_FAILED_IMAGE, UpdateStatus.SKIPPED_WINDOW):
+                    summary["skipped"].append(info.name)
 
         handle_container_list(auto_update, True)
         handle_container_list(monitor_only, False)
@@ -898,11 +973,18 @@ class WatcherService:
             "health_check_retries": self.config.health_check_retries,
             "health_check_delay": self.config.health_check_delay,
             "journal_enabled": self.config.journal_enabled,
-            "cooldown_seconds": self.config.failure_cooldown_seconds
+            "cooldown_seconds": self.config.failure_cooldown_seconds,
+            "update_window_start": self.config.update_window_start,
+            "update_window_end": self.config.update_window_end,
+            "skip_failed_images": self.config.skip_failed_images,
         }
 
         if self.config.notify_on_startup:
             self.notifier.notify_startup(config_dict, socket.gethostname())
+
+        if self.config.update_window_start:
+            logger.info(f"New updates may begin from {self.config.update_window_start} until {self.config.update_window_end} ({self.config.tz}, end exclusive). Recovery and active updates may finish outside this window.")
+        logger.info(f"Skip previously failed image versions: {self.config.skip_failed_images}")
 
         self.startup_recovery()
 

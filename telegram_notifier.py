@@ -106,11 +106,11 @@ class TelegramNotifier:
         if summary["rolled_back"]:
             lines.append(f"Rolled Back:\n- {chr(10) + '- '.join([format_info(n) for n in summary['rolled_back']])}")
         if summary.get("skipped"):
-            lines.append(f"Skipped (Cooldown):\n- {chr(10) + '- '.join([format_info(n) for n in summary['skipped']])}")
+            lines.append(f"Skipped (cooldown/update policy):\n- {chr(10) + '- '.join([format_info(n) for n in summary['skipped']])}")
             
         if summary.get("interrupted"):
             lines.append("Interrupted (shutdown; verification deferred): " + ", ".join(format_info(name) for name in summary["interrupted"]))
-        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported") and not summary.get("interrupted"):
+        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported") and not summary.get("interrupted") and not summary.get("skipped"):
             lines.append("ℹ️ No updates or errors detected.")
 
         self._send(f"📊 Watcher Scan Summary ({duration_sec:.1f}s)", "\n".join(lines))

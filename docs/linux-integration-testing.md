@@ -8,6 +8,8 @@ This document provides a safe procedure for executing Docker integration tests f
 
 On 2026-10-02, **34 automated Docker integration tests passed** against Docker Desktop's Linux engine 29.6.2 (API 1.55) from a Windows/Python 3.12 client, with process checks running inside Linux/Python 3.12 containers. Separately, **176 mocked unit tests passed**, Ruff reported no findings, and `pip check` reported no broken requirements.
 
+**Subsequent homelab-policy changes (2026-10-02):** The optional nightly window, persistent rejected-image policy, skipped-result notifications and DST daily-scheduling fix pass **226 unit tests (50 new)**. Ruff, source compilation and `pip check` also pass. These additions have **not** been rechecked against a live Docker daemon: the CLI could not access its configuration and the requested engine pipe was unavailable in this session. The earlier 34 Docker results describe the preceding source revision, not live verification of these changes. No real `.env` changes, homelab updates or deployment were performed.
+
 Run the opt-in harness on a Linux daemon:
 ```bash
 WATCHER_DOCKER_INTEGRATION=1 python integration_test_docker.py -v
@@ -131,6 +133,7 @@ Checked items were verified by the automated harness within the scope above. Unc
 * [x] **Normal Watcher entry point and scheduled/interval loop via scoped endpoint:** Repository Dockerfile/CMD and `main.py`, native SIGTERM/restart recovery, real UTC scheduling, interval cycles and dry-run passed without application patches.
 * [x] **Normal second Watcher instance via scoped endpoint:** Two normal application processes exercise self-ID detection and singleton refusal; the first stays running.
 * [ ] **Raw daemon and homelab acceptance:** Verify the deployment configuration directly on a disposable daemon, rather than the restricted fixture transport. Do not run this against production workloads as a shortcut.
+* [ ] **Latest homelab-policy live verification:** Re-run the Docker suite and exercise an isolated 02:00-05:00 profile, boundary deferral and rejection of the same failed image after a restart. These changes currently have unit coverage only.
 * [ ] **Registry/environment acceptance:** Check real homelab registry authentication/TLS, outages and deployment-specific bind paths without risking user data.
 * [ ] **Infrastructure restart/power loss:** Container SIGKILL with an intact Docker daemon is not a host/VM/filesystem crash test.
 

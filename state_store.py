@@ -69,6 +69,9 @@ class StateStore:
                     "count": v.get("count", 0),
                     "cooldown_until": v["cooldown_until"].isoformat() if isinstance(v.get("cooldown_until"), datetime) else datetime.min.replace(tzinfo=timezone.utc).isoformat()
                 }
+                for field in ("failed_image_id", "failed_image_ref"):
+                    if isinstance(v.get(field), str):
+                        to_save["cooldowns"][k][field] = v[field]
                 
             os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
             temp_path = f"{self.path}.tmp"
@@ -97,7 +100,7 @@ class StateStore:
         except StateStoreError:
             self._data = old_data
             raise
-    def start_transaction(self, container_name: str, original_container_id: str, original_image_id: str, planned_new_image_id: str) -> str:
+    def start_transaction(self, container_name: str, original_container_id: str, original_image_id: str, planned_new_image_id: str, image_ref: str | None = None) -> str:
         """Starts an update transaction for a container."""
         if container_name in self._data.get("transactions", {}):
             raise StateStoreError(f"Transaction already exists for container {container_name}")
@@ -111,6 +114,7 @@ class StateStore:
                 "original_container_id": original_container_id,
                 "original_image_id": original_image_id,
                 "planned_new_image_id": planned_new_image_id,
+                "image_ref": image_ref,
                 "backup_name": f"{container_name}_backup",
                 "backup_container_id": None,
                 "new_container_id": None,

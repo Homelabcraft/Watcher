@@ -11,6 +11,8 @@ The unit tests cover the core logic:
 - Rollbacks recovering from a rename failure
 - Safe restoration of renamed backups
 - Deduplication of dependent container restarts
+- Optional local-time update windows, boundary checks after pull/state capture/notifications, and spring/autumn clock changes
+- Persistent rejected-image policy, newer-image eligibility, registry/preparation failures, and unhealthy startup recovery
 
 **Run the tests using:**
 ```bash

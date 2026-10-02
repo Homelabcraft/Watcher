@@ -29,6 +29,8 @@ While tools like Watchtower are great for blindly pulling and restarting contain
 * **Rollbacks (Container vs. Data):** Watcher performs *container* rollbacks by restoring the previous container instance if the new one fails health checks. It does **not** perform data rollbacks. If a new image performs an irreversible database migration before failing, the old container may not be able to read the new data format.
 * **Image Defaults:** Recreation compares the container with its original image. Inherited start commands, environment variables, users, working directories, stop signals, healthchecks and labels are left to the new image; differing container overrides are retained. Docker inspection cannot distinguish an explicit setting from an inherited default if both have exactly the same value. Use manual updates if that distinction matters for your container.
 * **Global Exclusions:** Name and regex exclusions apply to update scans and dependent restarts. `watcher.enable=false` means monitor-only for updates; an explicit `watcher.depends_on` can still request a restart unless the container is globally excluded.
+* **Night Window:** Optional `UPDATE_WINDOW_START` / `UPDATE_WINDOW_END` restrict when scans and new updates begin, in `TZ`. The end is exclusive. Already-started updates, their dependent restarts, rollback and startup recovery may finish outside the window to preserve availability; this is not a hard stop at the end time.
+* **Rejected Images:** By default, `SKIP_FAILED_IMAGES=true` remembers the last image that failed health verification or a known image compatibility check (currently a missing image user) for each container, in persistent state. After cooldown, Watcher still pulls to discover newer images but does not recreate that same image/reference again. A different image may be tried; successful updates clear the rejection. Registry outages, generic Docker/network/state failures and preparation errors only cause the normal cooldown. This detects Docker/startup health failures, not every application-level or data migration problem.
 
 ### Persistence & Crash Recovery
 * **Data Directory:** Watcher persists its state and journal to a mapped `data/` volume.
@@ -103,6 +105,8 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | :--- | :--- | :--- |
 | `CHECK_INTERVAL` | `86400` | Scan frequency in seconds (Default: 24h). Ignored if `SCHEDULE_TIME` is set. |
 | `SCHEDULE_TIME`  | `""`    | Optional: Run Watcher once daily at this specific local time (e.g. `03:00`). |
+| `UPDATE_WINDOW_START` | `""` | Optional local window start, inclusive (e.g. `02:00`); requires `UPDATE_WINDOW_END`. |
+| `UPDATE_WINDOW_END` | `""` | Optional local window end, exclusive (e.g. `05:00`); windows crossing midnight are supported. A daily `SCHEDULE_TIME` must be inside the window. |
 | `WATCH_BY_LABEL` | `true`  | If true, only containers with `watcher.enable=true` are updated. |
 | `DRY_RUN`        | `false` | Generates a detailed Execution Plan to your configured messengers. |
 | `STATE_PATH` | `/app/data/state.json` | Path to persistent state file for recovery. |
@@ -110,6 +114,7 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | `JOURNAL_ENABLED` | `true` | Enable persistent local JSON history of all scan cycles. |
 | `JOURNAL_MAX_ENTRIES` | `100` | Maximum cycle records to keep in the journal. |
 | `FAILURE_COOLDOWN_SECONDS` | `3600` | Seconds to wait before retrying a container that failed multiple times. |
+| `SKIP_FAILED_IMAGES` | `true` | Skip the last rejected image/reference per container, even after cooldown. Set false to retry it after cooldown. |
 | `MAX_UPDATES_PER_CYCLE` | `0` | Limit updates per run (0 = unlimited) to prevent resource spikes. |
 | `RESTART_DEPENDENTS` | `true` | If false, disables the automatic restart of linked containers. |
 | `NOTIFY_SUMMARY_STRATEGY` | `always` | `always`, `on_change` (action taken), or `on_error`. |
@@ -119,6 +124,25 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 | `HEALTH_CHECK_RETRIES` | `12` | Number of attempts to verify container health. |
 | `HEALTH_CHECK_DELAY` | `10` | Seconds to wait between health checks. |
 | `LOG_LEVEL` | `INFO` | Standard output log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+
+### Nightly Homelab Profile
+
+Example only; existing `.env` files are not changed automatically:
+
+```env
+TZ=Europe/Zurich
+CHECK_INTERVAL=1800
+# Leave SCHEDULE_TIME unset for repeated checks during the night window.
+UPDATE_WINDOW_START=02:00
+UPDATE_WINDOW_END=05:00
+WATCH_BY_LABEL=false
+SKIP_FAILED_IMAGES=true
+NOTIFY_SUMMARY_STRATEGY=on_change
+```
+
+This scans every 30 minutes after a cycle finishes while the window is open, waits until the next opening outside it, and updates eligible `:latest` containers by default. Self-protection, name/regex exclusions and `watcher.enable=false` still apply. Fixed tags/digests are not upgraded to newer release tags. For a single daily run, set `SCHEDULE_TIME=02:00` instead; scheduled mode waits for the next scheduled run, including after a restart.
+
+On a spring clock change, missing window-start times advance to a real time inside the window; a window entirely inside the missing hour is skipped that day. Autumn's repeated hour uses actual timestamps for waits. To deliberately retry a rejected image, temporarily set `SKIP_FAILED_IMAGES=false`; do not delete `state.json`, since it also owns recovery transactions.
 
 #### Notifications
 | Variable | Description |

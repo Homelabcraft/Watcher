@@ -108,11 +108,11 @@ class DiscordNotifier:
             
         if summary.get("interrupted"):
             lines.append("\nInterrupted (shutdown; verification deferred): " + ", ".join(summary["interrupted"]))
-        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported") and not summary.get("interrupted"):
+        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported") and not summary.get("interrupted") and not summary.get("skipped"):
             lines.append("\nℹ️ No updates or errors detected.")
 
         if summary.get("skipped"):
-            lines.append(f"\n⏭️ **Skipped (Cooldown):** {', '.join(summary['skipped'])}")
+            lines.append(f"\n⏭️ **Skipped (cooldown/update policy):** {', '.join(summary['skipped'])}")
 
         self.send_event("Cycle Complete", "\n".join(lines), color=0x9b59b6)
 

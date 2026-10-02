@@ -10,6 +10,8 @@ class UpdateStatus(Enum):
     FAILED = auto()
     REPORTED = auto()
     SKIPPED_COOLDOWN = auto()
+    SKIPPED_FAILED_IMAGE = auto()
+    SKIPPED_WINDOW = auto()
     INTERRUPTED = auto()  # Shutdown interrupted an update; recovery may be pending.
 
 @dataclass

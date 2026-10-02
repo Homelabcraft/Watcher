@@ -8,8 +8,9 @@ import requests
 from docker.models.containers import Container, _create_container_args
 from docker.types import LogConfig, Mount, Ulimit
 
-from exceptions import RecreationError
+from exceptions import ImageRecreationError, RecreationError, UpdateWindowClosed
 from models import UpdateStatus
+from update_window import UpdateWindow
 
 logger = logging.getLogger('Watcher.Docker')
 
@@ -349,6 +350,13 @@ class DockerHandler:
         if backup_exists:
             raise RecreationError(f"Backup container {backup_name} already exists. Aborting update for safety. Please resolve manually or restart Watcher for auto-recovery.")
 
+        window_start = getattr(self.config, "update_window_start", None)
+        window_end = getattr(self.config, "update_window_end", None)
+        if isinstance(window_start, str) and isinstance(window_end, str):
+            window = UpdateWindow(window_start, window_end, self.config.tz)
+            if not window.is_open():
+                raise UpdateWindowClosed(f"Update window closed before stopping {name}.")
+
         try:
 
             # Use container's specific stop timeout if defined, otherwise 15s
@@ -428,7 +436,7 @@ class DockerHandler:
                 if is_user_error and "user" in ca and attempts < max_attempts:
                     if not getattr(self.config, 'allow_user_fallback', False):
                         logger.error(f"RECREATION FAILED for {name}: User '{ca['user']}' not found in new image. Fallback to root disabled.")
-                        raise RecreationError(f"User '{ca['user']}' not found in new image. Update aborted for safety.")
+                        raise ImageRecreationError(f"User '{ca['user']}' not found in new image. Update aborted for safety.")
 
                     logger.warning(
                         f"RECREATION FAILED for {name} due to User configuration ('{ca['user']}'). "
@@ -445,6 +453,8 @@ class DockerHandler:
                     continue
 
                 logger.error(f"Docker API Error during recreation of {name} on attempt {attempts}: {e}")
+                if is_user_error:
+                    raise ImageRecreationError(f"Docker API Error: {e}") from e
                 raise RecreationError(f"Docker API Error: {e}")
             except Exception as e:  # noqa: BLE001
                 logger.error(f"Unexpected Error during recreation of {name} on attempt {attempts}: {e}")

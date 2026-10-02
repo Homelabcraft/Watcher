@@ -19,6 +19,8 @@ class Config:
         self.schedule_time = os.getenv("SCHEDULE_TIME")
         if self.schedule_time:
             self.schedule_time = self.schedule_time.strip()
+        self.update_window_start = (os.getenv("UPDATE_WINDOW_START") or "").strip() or None
+        self.update_window_end = (os.getenv("UPDATE_WINDOW_END") or "").strip() or None
         self.discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
         self.slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         self.ntfy_url = os.getenv("NTFY_URL")
@@ -62,6 +64,7 @@ class Config:
         # Cooldown & Journal
         self.failure_cooldown_seconds = self._parse_int("FAILURE_COOLDOWN_SECONDS", 3600)
         self.max_retries_before_cooldown = self._parse_int("MAX_RETRIES_BEFORE_COOLDOWN", 1)
+        self.skip_failed_images = self._parse_bool("SKIP_FAILED_IMAGES", True)
         self.journal_enabled = self._parse_bool("JOURNAL_ENABLED", True)
         self.journal_path = os.getenv("JOURNAL_PATH", "/app/data/journal.json")
         self.state_path = os.getenv("STATE_PATH", "/app/data/state.json")
@@ -165,3 +168,19 @@ class Config:
             zoneinfo.ZoneInfo(self.tz)
         except (zoneinfo.ZoneInfoNotFoundError, ValueError):
             raise ConfigurationError(f"Invalid TZ: {self.tz}")
+
+        if bool(self.update_window_start) != bool(self.update_window_end):
+            raise ConfigurationError("UPDATE_WINDOW_START and UPDATE_WINDOW_END must be set together.")
+        if self.update_window_start:
+            for key, value in (("UPDATE_WINDOW_START", self.update_window_start), ("UPDATE_WINDOW_END", self.update_window_end)):
+                if not re.fullmatch(r"([01][0-9]|2[0-3]):[0-5][0-9]", value):
+                    raise ConfigurationError(f"{key} must be in HH:MM format (24-hour). Got: '{value}'")
+            if self.update_window_start == self.update_window_end:
+                raise ConfigurationError("UPDATE_WINDOW_START and UPDATE_WINDOW_END must differ.")
+            if self.schedule_time:
+                from datetime import time
+
+                from update_window import UpdateWindow
+                window = UpdateWindow(self.update_window_start, self.update_window_end, self.tz)
+                if not window.contains_time(time.fromisoformat(self.schedule_time)):
+                    raise ConfigurationError("SCHEDULE_TIME must be inside the update window (end exclusive).")
