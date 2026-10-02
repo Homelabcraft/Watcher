@@ -106,7 +106,9 @@ class DiscordNotifier:
         if summary.get("rolled_back"):
             lines.append(f"\n⚠️ **Rolled Back:** {', '.join(summary['rolled_back'])}")
             
-        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported"):
+        if summary.get("interrupted"):
+            lines.append("\nInterrupted (shutdown; verification deferred): " + ", ".join(summary["interrupted"]))
+        if not summary["updated"] and not summary["failed"] and not summary.get("rolled_back") and not summary.get("reported") and not summary.get("interrupted"):
             lines.append("\nℹ️ No updates or errors detected.")
 
         if summary.get("skipped"):

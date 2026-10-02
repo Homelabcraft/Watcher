@@ -5,7 +5,7 @@ import socket
 import docker
 import docker.errors
 import requests
-from docker.models.containers import Container
+from docker.models.containers import Container, _create_container_args
 from docker.types import LogConfig, Mount, Ulimit
 
 from exceptions import RecreationError
@@ -29,29 +29,29 @@ class DockerHandler:
         except Exception:  # noqa: BLE001
             return None
 
+    def is_excluded(self, container: Container) -> bool:
+        """Apply the same exclusions to scans and dependent restarts."""
+        if self.self_id and container.id == self.self_id:
+            return True
+        if (container.labels or {}).get("watcher.self") == "true":
+            return True
+        if not self.config:
+            return False
+        if container.name in self.config.exclude_names:
+            return True
+        return bool(self.config.exclude_regex and re.search(self.config.exclude_regex, container.name))
+
     def get_watched_containers(self) -> tuple[list[Container], list[Container]]:
         """Finds containers using internal config for filtering. Returns (auto_update, monitor_only)."""
         auto_update = []
         monitor_only = []
 
-        # Pre-compile regex for performance
-        exclude_re = None
-        if self.config and self.config.exclude_regex:
-            try:
-                exclude_re = re.compile(self.config.exclude_regex)
-            except Exception:  # noqa: BLE001
-                logger.warning(f"Failed to compile exclude regex: {self.config.exclude_regex}")
-
         try:
             for c in self.client.containers.list():
                 labels = c.labels or {}
 
-                # Critical Self-Protection: Skip our own container by ID, name, or specific label
-                if self.self_id and c.id == self.self_id: continue
-                if labels.get("watcher.self") == "true": continue
-                if self.config:
-                    if c.name in self.config.exclude_names: continue
-                    if exclude_re and exclude_re.search(c.name): continue
+                if self.is_excluded(c):
+                    continue
 
                 # Evaluate image reference via Config.Image or RepoTags
                 ref = self.get_image_ref(c)
@@ -110,10 +110,34 @@ class DockerHandler:
             logger.error(f"Unexpected pull error for {container.name}: {e}")
             return UpdateStatus.FAILED, None, None
 
+    @staticmethod
+    def _get_runtime_overrides(config: dict, image_config: dict) -> dict:
+        """Keep operator overrides, allowing the new image to supply its own defaults."""
+        overrides = config.copy()
+        for field in ("Cmd", "Entrypoint", "User", "WorkingDir", "StopSignal", "Healthcheck"):
+            if field in image_config and config.get(field) == image_config[field]:
+                overrides.pop(field, None)
+        if "Env" in config:
+            inherited_env = set(image_config.get("Env") or [])
+            overrides["Env"] = [entry for entry in (config["Env"] or []) if entry not in inherited_env] or None
+        if "Labels" in config:
+            inherited_labels = image_config.get("Labels") or {}
+            overrides["Labels"] = {
+                key: value for key, value in (config["Labels"] or {}).items()
+                if key not in inherited_labels or value != inherited_labels[key]
+            }
+        return overrides
+
     def get_recreation_plan(self, container: Container) -> dict:
         container.reload()
         attrs = container.attrs
-        config = attrs.get('Config', {})
+        try:
+            image_config = container.image.attrs.get("Config", {})
+        except docker.errors.DockerException as e:
+            raise RecreationError(f"Cannot inspect original image for {container.name}: {e}") from e
+        if not isinstance(image_config, dict):
+            raise RecreationError(f"Original image config for {container.name} is invalid. Refusing recreation.")
+        config = self._get_runtime_overrides(attrs.get('Config', {}), image_config)
         host_config = attrs.get('HostConfig', {})
 
         # 1. Ports: Multiple bindings and HostIP support + Integer conversion
@@ -260,6 +284,18 @@ class DockerHandler:
 
 
 
+    def _create_replacement(self, create_args: dict, networking_config) -> Container:
+        if create_args.get("stop_timeout") is None:
+            return self.client.containers.create(networking_config=networking_config, **create_args)
+
+        # SDK 7.1 omits stop_timeout from its high-level allowlist; the low-level API supports it.
+        kwargs = dict(create_args, networking_config=networking_config, version=self.client.api._version)
+        stop_timeout = kwargs.pop("stop_timeout")
+        api_kwargs = _create_container_args(kwargs)
+        api_kwargs["stop_timeout"] = stop_timeout
+        response = self.client.api.create_container(**api_kwargs)
+        return self.client.containers.get(response["Id"])
+
     def recreate(self, name: str, plan: dict, state_store=None, transaction_id: str=None) -> Container | None:  # noqa: RUF013
         if self.dry_run: return None
         ca = plan["create_args"].copy() # Work on a copy to allow retry modifications
@@ -278,21 +314,23 @@ class DockerHandler:
         primary_net_name = None
 
         network_mode = str(ca.get('network_mode', ''))
-        is_special_mode = network_mode in ('host', 'none', 'default', 'bridge') or network_mode.startswith('container:')
+        is_special_mode = network_mode in ('host', 'none') or network_mode.startswith('container:')
 
         # Defensive check for networks to avoid IndexError
         if nets and not is_special_mode:
             keys = list(nets.keys())
             if keys:
-                primary_net_name = keys[0]
+                preferred_network = 'bridge' if network_mode == 'default' else network_mode
+                primary_net_name = preferred_network if preferred_network in nets else keys[0]
                 n_cfg = nets[primary_net_name]
-                networking_config = self.client.api.create_networking_config({
+                # The high-level SDK requires `network` and unwrapped endpoint settings.
+                networking_config = {
                     primary_net_name: self.client.api.create_endpoint_config(
                         aliases=n_cfg.get('Aliases')
                     )
-                })
-                if network_mode == primary_net_name:
-                    ca.pop('network_mode', None)
+                }
+                ca["network"] = primary_net_name
+                ca.pop('network_mode', None)
 
         # 1. State Capture: Stop and Rename old container
         try:
@@ -348,7 +386,7 @@ class DockerHandler:
             new_container = None
             try:
                 logger.info(f"Creating {name} (Attempt {attempts}/{max_attempts})...")
-                new_container = self.client.containers.create(networking_config=networking_config, **ca)
+                new_container = self._create_replacement(ca, networking_config)
                 if state_store:
                     try:
                         state_store.update_transaction(name, "replacement_created", new_container_id=new_container.id, new_image_id=new_container.image.id)

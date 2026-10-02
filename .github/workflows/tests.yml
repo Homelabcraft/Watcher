@@ -5,6 +5,23 @@ on:
       - main
       - 'feat/**'
   pull_request:
+  workflow_dispatch:
+    inputs:
+      docker_integration:
+        description: Run disposable Linux Docker lifecycle, mount and timeout checks
+        required: false
+        default: false
+        type: boolean
+      release_gates:
+        description: Also run private registry and instrumented SIGKILL/restart checks
+        required: false
+        default: false
+        type: boolean
+      entrypoint_gates:
+        description: Also run normal Dockerfile/main.py, scheduling and SIGTERM checks
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -19,10 +36,12 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
       - name: Install dependencies
         run: |
-          python -m pip install -r requirements.txt
-          python -m pip install ruff
+          python -m pip install -r requirements-dev.txt
       - name: Run Ruff
         run: ruff check .
       - name: Compile python files
@@ -33,3 +52,21 @@ jobs:
         run: git diff --check
       - name: Check dependencies
         run: python -m pip check
+
+  docker-integration:
+    if: github.event_name == 'workflow_dispatch' && (inputs.docker_integration || inputs.release_gates || inputs.entrypoint_gates)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run opt-in Linux Docker lifecycle checks
+        env:
+          WATCHER_DOCKER_INTEGRATION: '1'
+          WATCHER_RELEASE_GATES: ${{ (inputs.release_gates || inputs.entrypoint_gates) && '1' || '0' }}
+          WATCHER_ENTRYPOINT_GATES: ${{ inputs.entrypoint_gates && '1' || '0' }}
+        run: python integration_test_docker.py -v

@@ -3,9 +3,11 @@
 [![Python Version](https://img.shields.io/badge/python-3.12-blue?style=flat-square)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat-square&logo=docker)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v1.7.0-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
+[![Version](https://img.shields.io/badge/version-v1.7.0--dev-orange?style=flat-square)](https://github.com/Homelabcraft/Watcher/releases)
 
 **Watcher** is a Homelab Docker container auto-updater built for environments where short downtimes are acceptable. It automates your image lifecycle while prioritizing **system stability and data persistence** through container rollbacks, multi-stage health validation, and rich multi-messenger notifications.
+
+**Development status:** This branch prepares v1.7.0; it is not a published release. Real Docker checks include private registry pulls, bind mounts, SIGKILL/restart recovery and the normal Dockerfile/`main.py` process (interval/scheduled cycles, dry-run, SIGTERM and singleton refusal) through a private test-scoped Docker endpoint. Actual homelab deployment still requires separate acceptance; see [verification scope](docs/linux-integration-testing.md).
 
 ---
 
@@ -25,6 +27,8 @@ While tools like Watchtower are great for blindly pulling and restarting contain
 ### Operational Policy
 * **`:latest` Policy:** Watcher is exclusively designed to update containers tracking the `:latest` tag. Containers with explicit version tags (e.g., `:16`) or digests are ignored to ensure predictability.
 * **Rollbacks (Container vs. Data):** Watcher performs *container* rollbacks by restoring the previous container instance if the new one fails health checks. It does **not** perform data rollbacks. If a new image performs an irreversible database migration before failing, the old container may not be able to read the new data format.
+* **Image Defaults:** Recreation compares the container with its original image. Inherited start commands, environment variables, users, working directories, stop signals, healthchecks and labels are left to the new image; differing container overrides are retained. Docker inspection cannot distinguish an explicit setting from an inherited default if both have exactly the same value. Use manual updates if that distinction matters for your container.
+* **Global Exclusions:** Name and regex exclusions apply to update scans and dependent restarts. `watcher.enable=false` means monitor-only for updates; an explicit `watcher.depends_on` can still request a restart unless the container is globally excluded.
 
 ### Persistence & Crash Recovery
 * **Data Directory:** Watcher persists its state and journal to a mapped `data/` volume.
@@ -142,6 +146,7 @@ Watcher addresses the "Broken Update" problem by ensuring that a functional envi
 
 Before running Watcher in a production environment, you should verify its operation in a sandbox.
 Please refer to the [Testing Guide](docs/testing.md) for automated unit testing and sandbox instructions.
+The opt-in [Docker lifecycle harness](integration_test_docker.py) checks disposable containers on a real Linux daemon. The default suite uses local fixture tags; `WATCHER_RELEASE_GATES=1` adds real private-registry pulls and instrumented SIGKILL/restart checks. `WATCHER_ENTRYPOINT_GATES=1` additionally checks the normal Dockerfile/`main.py` process through a private test-scoped Docker endpoint. See the [integration guide](docs/linux-integration-testing.md) for scope and remaining release gates.
 
 ---
 

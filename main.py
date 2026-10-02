@@ -103,8 +103,17 @@ class WatcherService:
     def _handle_shutdown(self, signum, frame):
         """Flags the service to stop safely after the current operation."""
         sig_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
-        logger.info(f"Received {sig_name}. Graceful shutdown initiated. Will exit after current cycle/update completes...")
+        logger.info(f"Received {sig_name}. Graceful shutdown initiated. Active Docker calls may finish; unverified transactions will be retained for recovery.")
         self.shutdown_event.set()
+
+    def _interrupt_update(self, info, start_time):
+        info.status = UpdateStatus.INTERRUPTED
+        info.error_step = "shutdown"
+        info.error_message = "Shutdown interrupted update verification or preparation; existing containers, backups and any transaction are retained."
+        info.duration_sec = time.perf_counter() - start_time
+        logger.info(f"Update interrupted for {info.name}; deferring any unfinished verification to startup recovery.")
+        self.notifier.notify_summary("Update interrupted", f"{info.name}: {info.error_message}")
+        return info
 
     def _is_in_cooldown(self, name: str) -> bool:
         """Checks if a container is currently in error cooldown."""
@@ -182,6 +191,9 @@ class WatcherService:
                 info.error_step = None
                 return info
 
+            if self.shutdown_event.is_set():
+                return self._interrupt_update(info, start_time)
+
             # 2. State Capture
             info.error_step = "state_capture"
             container.reload()
@@ -202,6 +214,9 @@ class WatcherService:
                     return info
 
             dependents = self.get_dependents([name], [old_id])
+
+            if self.shutdown_event.is_set():
+                return self._interrupt_update(info, start_time)
 
             # 3. Execution
             try:
@@ -283,6 +298,8 @@ class WatcherService:
 
                 return info
             else:
+                if self.shutdown_event.is_set():
+                    return self._interrupt_update(info, start_time)
                 logger.error(f"Health failed: {name}. Rolling back...")
                 info.error_message = "Unhealthy post-update"
                 info.status = UpdateStatus.ROLLED_BACK
@@ -384,7 +401,7 @@ class WatcherService:
                 current_container = self.client.containers.get(name)
             except docker.errors.NotFound:
                 pass
-            except Exception as e:
+            except docker.errors.DockerException as e:
                 logger.error(f"Error handling current container during rollback: {e}")
                 msg = f"Rollback failed: {e}"
                 self.notifier.notify_rollback(name, "failed", msg)
@@ -396,7 +413,7 @@ class WatcherService:
                 backup = self.client.containers.get(backup_name)
             except docker.errors.NotFound:
                 pass
-            except Exception as e:
+            except docker.errors.DockerException as e:
                 logger.error(f"Error accessing backup {backup_name}: {e}")
                 msg = f"Rollback failed: {e}"
                 self.notifier.notify_rollback(name, "failed", msg)
@@ -414,6 +431,10 @@ class WatcherService:
                     self._best_effort_end_tx(name)
                     return True, msg
                 else:
+                    if self.shutdown_event.is_set():
+                        msg = "Original retained; rollback health verification interrupted by shutdown. Transaction retained for recovery."
+                        self.notifier.notify_summary("Rollback verification deferred", f"{name}: {msg}")
+                        return False, msg
                     msg = "Original container failed health check after rollback."
                     self.notifier.notify_rollback(name, "failed", msg)
                     self._best_effort_update_tx(name, 'rollback_failed')
@@ -470,6 +491,10 @@ class WatcherService:
                 self._best_effort_end_tx(name)
                 return True, msg
             else:
+                if self.shutdown_event.is_set():
+                    msg = "Original restored; rollback health verification interrupted by shutdown. Transaction retained for recovery."
+                    self.notifier.notify_summary("Rollback verification deferred", f"{name}: {msg}")
+                    return False, msg
                 msg = "Container stopped or unhealthy after rollback attempt."
                 self.notifier.notify_rollback(name, "failed", msg)
                 self._best_effort_update_tx(name, 'rollback_failed')
@@ -487,7 +512,7 @@ class WatcherService:
         try:
             for c in self.client.containers.list():
                 labels = c.labels or {}
-                if c.name in self.config.exclude_names or labels.get("watcher.self") == "true":
+                if self.docker.is_excluded(c):
                     continue
                 if c.name in updated_names:
                     continue
@@ -518,7 +543,7 @@ class WatcherService:
         Restarts containers that explicitly depend on the updated containers via labels
         or NetworkMode.
         """
-        if not self.config.restart_dependents:
+        if not self.config.restart_dependents or self.shutdown_event.is_set():
             return
 
         if not updated_containers:
@@ -535,6 +560,8 @@ class WatcherService:
         failures = []
         try:
             for c in self.client.containers.list():
+                if self.shutdown_event.is_set():
+                    break
                 if c.name in dependent_names:
                     logger.info(f"Restarting dependent container {c.name}...")
                     try:
@@ -559,7 +586,7 @@ class WatcherService:
         now = datetime.now(tz)
         
         try:
-            target_time = datetime.strptime(self.config.schedule_time, "%H:%M").time()
+            target_time = datetime.strptime(self.config.schedule_time, "%H:%M").time()  # noqa: DTZ007 -- time-only value; date and TZ are applied below
         except ValueError:
             logger.error(f"Invalid SCHEDULE_TIME: {self.config.schedule_time}. Falling back to 24h interval.")
             return 86400.0
@@ -587,6 +614,8 @@ class WatcherService:
                 return
 
             for name, tx in list(transactions.items()):
+                if self.shutdown_event.is_set():
+                    break
                 self._process_single_recovery(name, tx)
         except Exception as e:  # noqa: BLE001
             logger.error(f"Error during startup recovery: {e}")
@@ -655,6 +684,9 @@ class WatcherService:
                     logger.info(f"Original container {name} is healthy. Ending transaction.")
                     self.state_store.end_transaction(name)
                 else:
+                    if self.shutdown_event.is_set():
+                        logger.info(f"Recovery verification interrupted for {name}; retaining the original and transaction.")
+                        return
                     logger.error(f"Original container {name} failed health check. Retaining backup and transaction.")
                     self._best_effort_update_tx(name, "rollback_failed")
                 return
@@ -673,6 +705,9 @@ class WatcherService:
                         backup_c.remove(force=True)
                     self.state_store.end_transaction(name)
                 else:
+                    if self.shutdown_event.is_set():
+                        logger.info(f"Recovery verification interrupted for {name}; retaining replacement, backup and transaction.")
+                        return
                     logger.warning(f"New container {name} is unhealthy. Rolling back...")
                     if backup_c:
                         main_c.remove(force=True)
@@ -682,6 +717,9 @@ class WatcherService:
                             logger.info(f"Rollback successful for {name}.")
                             self.state_store.end_transaction(name)
                         else:
+                            if self.shutdown_event.is_set():
+                                logger.info(f"Restored-original verification interrupted for {name}; retaining transaction.")
+                                return
                             logger.error(f"Recovered container {name} unhealthy.")
                             self.state_store.update_transaction(name, "rollback_failed")
                     else:
@@ -704,6 +742,9 @@ class WatcherService:
                     logger.info(f"Rollback successful for {name}.")
                     self.state_store.end_transaction(name)
                 else:
+                    if self.shutdown_event.is_set():
+                        logger.info(f"Restored-original verification interrupted for {name}; retaining transaction.")
+                        return
                     logger.error(f"Recovered container {name} unhealthy.")
                     self.state_store.update_transaction(name, "rollback_failed")
                 return
@@ -731,7 +772,7 @@ class WatcherService:
         total_checked = len(auto_update) + len(monitor_only)
         self.notifier.notify_scan_started(total_checked, "DRY_RUN" if self.config.dry_run else "LIVE")
 
-        summary = {"updated": [], "failed": [], "rolled_back": [], "reported": [], "skipped": []}
+        summary = {"updated": [], "failed": [], "rolled_back": [], "reported": [], "skipped": [], "interrupted": []}
         updated_info = []
         all_infos = []
 
@@ -779,6 +820,8 @@ class WatcherService:
                 elif info.status == UpdateStatus.ROLLED_BACK:
                     summary["rolled_back"].append(info.name)
                     if attempt_update: update_count += 1
+                elif info.status == UpdateStatus.INTERRUPTED:
+                    summary["interrupted"].append(info.name)
 
         handle_container_list(auto_update, True)
         handle_container_list(monitor_only, False)
@@ -812,7 +855,7 @@ class WatcherService:
         strategy = self.config.notify_summary_strategy
 
         has_errors = len(summary["failed"]) > 0 or len(summary["rolled_back"]) > 0
-        has_actions = len(summary["updated"]) > 0 or has_errors
+        has_actions = len(summary["updated"]) > 0 or has_errors or bool(summary["interrupted"])
 
         if strategy == "on_error":
             should_notify = has_errors
@@ -828,6 +871,23 @@ class WatcherService:
         logger.info("--- Cycle End ---")
 
     def start(self):
+        try:
+            self._run_loop()
+        except Exception:
+            logger.exception("Watcher crashed unexpectedly.")
+            raise
+        finally:
+            logger.info("Watcher stopped. Any retained transactions require startup recovery.")
+            try:
+                self.notifier.notify_shutdown()
+            except Exception as error:  # noqa: BLE001
+                logger.warning(f"Shutdown notification failed: {error}")
+            try:
+                self.client.close()
+            except Exception as error:  # noqa: BLE001
+                logger.warning(f"Docker client cleanup failed: {error}")
+
+    def _run_loop(self):
         logger.info("Watcher started.")
         config_dict = {
             "check_interval": self.config.check_interval,
@@ -876,11 +936,8 @@ class WatcherService:
 
                 self.shutdown_event.wait(sleep_sec)
 
-        except Exception as e:  # noqa: BLE001
-            logger.critical(f"Crashed: {e}")
         finally:
-            logger.info("Watcher stopped securely.")
-            self.notifier.notify_shutdown()
+            self.shutdown_event.set()
 
 if __name__ == "__main__":
     WatcherService().start()

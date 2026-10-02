@@ -10,6 +10,7 @@ class UpdateStatus(Enum):
     FAILED = auto()
     REPORTED = auto()
     SKIPPED_COOLDOWN = auto()
+    INTERRUPTED = auto()  # Shutdown interrupted an update; recovery may be pending.
 
 @dataclass
 class ContainerUpdateInfo:

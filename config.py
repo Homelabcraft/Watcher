@@ -163,5 +163,5 @@ class Config:
         try:
             import zoneinfo
             zoneinfo.ZoneInfo(self.tz)
-        except Exception:
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError):
             raise ConfigurationError(f"Invalid TZ: {self.tz}")

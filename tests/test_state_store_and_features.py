@@ -143,6 +143,7 @@ class TestStateStoreAndFeatures(BaseTest):
         """Volumes und Mounts: Anonyme Volumes müssen erhalten bleiben."""
         handler = DockerHandler(self.mock_client, self.config)
         c = MagicMock()
+        c.image.attrs = {"Config": {}}
         c.attrs = {
             "HostConfig": {},
             "Config": {"Image": "test:latest"},
@@ -166,6 +167,7 @@ class TestStateStoreAndFeatures(BaseTest):
         """Device Requests: Convert HostConfig.DeviceRequests to docker.types.DeviceRequest."""
         handler = DockerHandler(self.mock_client, self.config)
         c = MagicMock()
+        c.image.attrs = {"Config": {}}
         c.name = "gpu_app"
         c.attrs = {
             "HostConfig": {
@@ -192,6 +194,7 @@ class TestStateStoreAndFeatures(BaseTest):
         """Mount Propagation: Direct mapping from Mounts array."""
         handler = DockerHandler(self.mock_client, self.config)
         c = MagicMock()
+        c.image.attrs = {"Config": {}}
         c.name = "prop_app"
         c.attrs = {
             "HostConfig": {},

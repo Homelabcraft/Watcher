@@ -123,7 +123,7 @@ class TestWatcherService(BaseTest):
         self.mock_client.containers.get.side_effect = mock_get
         self.service.health.wait_for_health = MagicMock(return_value=True)
 
-        res, msg = self.service.perform_rollback("test_app")
+        res, _msg = self.service.perform_rollback("test_app")
 
         self.assertTrue(res)
         mock_current.start.assert_called_once()
@@ -144,7 +144,7 @@ class TestWatcherService(BaseTest):
         self.mock_client.containers.get.side_effect = mock_get
         self.service.health.wait_for_health = MagicMock(return_value=False)
 
-        res, msg = self.service.perform_rollback("test_app")
+        res, _msg = self.service.perform_rollback("test_app")
 
         self.assertFalse(res)
         mock_current.start.assert_called_once()
@@ -180,6 +180,7 @@ class TestWatcherService(BaseTest):
 
     def test_get_recreation_plan_advanced_fields(self, mock_post):
         mock_container = MagicMock()
+        mock_container.image.attrs = {"Config": {}}
         mock_container.attrs = {
             'Config': {'Image': 'app:latest'},
             'HostConfig': {
@@ -322,8 +323,8 @@ class TestWatcherService(BaseTest):
         self.assertIn("app1", kwargs["json"]["embeds"][0]["description"])
 
     def test_get_sleep_duration(self, mock_post):
-        from datetime import datetime as real_datetime
         import zoneinfo
+        from datetime import datetime as real_datetime
 
         self.service.config.schedule_time = "14:30"
         self.service.config.tz = "Europe/Zurich"

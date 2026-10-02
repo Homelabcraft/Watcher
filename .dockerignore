@@ -2,8 +2,16 @@
 .github/
 .env
 tests/
+integration_test_docker.py
+integration_crash_worker.py
+integration_docker_endpoint.py
+requirements-dev.txt
 docs/
 __pycache__/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
 *.pyc
 data/
 *.tmp

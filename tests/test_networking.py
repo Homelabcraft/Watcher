@@ -16,6 +16,7 @@ class TestNetworking(BaseTest):
 
     def test_dynamic_primary_network(self):
         c = MagicMock()
+        c.image.attrs = {"Config": {}}
         c.attrs = {
             "NetworkSettings": {
                 "Networks": {
@@ -33,6 +34,7 @@ class TestNetworking(BaseTest):
 
     def test_multiple_dynamic_networks(self):
         c = MagicMock()
+        c.image.attrs = {"Config": {}}
         c.attrs = {
             "NetworkSettings": {
                 "Networks": {
@@ -50,6 +52,7 @@ class TestNetworking(BaseTest):
 
     def test_static_ipv4_rejected(self):
         c = MagicMock()
+        c.image.attrs = {"Config": {}}
         c.name = "app"
         c.attrs = {
             "NetworkSettings": {
@@ -67,6 +70,7 @@ class TestNetworking(BaseTest):
 
     def test_static_ipv6_rejected(self):
         c = MagicMock()
+        c.image.attrs = {"Config": {}}
         c.name = "app"
         c.attrs = {
             "NetworkSettings": {
@@ -85,6 +89,7 @@ class TestNetworking(BaseTest):
     def test_host_none_container_networks(self):
         # host mode
         c = MagicMock()
+        c.image.attrs = {"Config": {}}
         c.attrs = {"NetworkSettings": {"Networks": {"host": {}}}, "HostConfig": {"NetworkMode": "host"}}
         plan = self.handler.get_recreation_plan(c)
         self.assertEqual(plan["networks"], {"host": {}})

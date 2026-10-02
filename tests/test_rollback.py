@@ -16,6 +16,8 @@ class TestRollback(BaseTest):
         self.config.allow_user_fallback = True
         self.config.watch_by_label = False
         self.config.dry_run = False
+        self.config.exclude_regex = None
+        self.config.exclude_names = []
         with patch('docker.from_env', return_value=self.mock_client):
             self.service = WatcherService()
             self.service.docker = DockerHandler(self.mock_client, self.config)
@@ -37,6 +39,7 @@ class TestRollback(BaseTest):
             'NetworkSettings': {'Networks': {}}
         }
         mock_container.image.tags = ['app:latest']
+        mock_container.image.attrs = {"Config": {}}
 
         plan = self.service.docker.get_recreation_plan(mock_container)
         # 'user' should NOT be in create_args if it was an empty string
