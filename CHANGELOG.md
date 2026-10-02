@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+### Added
+- **Nightly Update Window:** Optional local-time `UPDATE_WINDOW_START` / `UPDATE_WINDOW_END`, validated together and against daily scheduling. New updates are checked before mutation; interval sleeps respect the window and DST. Active updates, dependent restarts and recovery are allowed to finish outside it.
+- **Rejected Image Memory:** `SKIP_FAILED_IMAGES=true` persists the last image/reference rejected by health verification or known image incompatibility (missing image user) per container before rollback. Known-bad versions are skipped after cooldown while different images remain eligible. Registry, generic Docker/network/state and preparation failures do not blacklist images; interrupted updates retain their existing recovery semantics.
+- **Crash Recovery & Startup Reconciliation (`startup_recovery()`):** Watcher now automatically detects orphaned `_backup` containers on startup resulting from unexpected host reboots or power loss during an active update. It automatically reconciles the state by checking health and safely recovering the primary or backup container. (Note: Automatic recovery depends on the persistent `state.json` accurately recording the transaction. Untracked backups will be reported for manual intervention.)
+- **Robust Persistence & Atomicity:** Both `state.json` and `journal.json` are now written using atomic temporary files (`os.replace`) with aggressive disk syncing (`f.flush()`, `os.fsync()`) to prevent JSON corruption during power loss. Added automatic detection and backup of corrupted state files.
+- **Enhanced Container Replication:** Drastically improved close configuration parity. Added support for complex mounts (including `tmpfs`), complex device mappings, DNS configurations (`dns`, `dns_search`, `dns_opt`), capabilities (`cap_add`, `cap_drop`), CPU/Memory limits, PID modes, and custom healthcheck start periods (`StartPeriod`).
+- **Data Persistence Strategy:** Re-architected storage paths. All operational data (journal, state) is now saved to an explicitly declared `data/` volume mount point, ensuring persistence across Watcher container updates.
+- **Fault-Tolerant Multi-Notifier:** The `MultiNotifier` component now strictly isolates failures. If one configured messaging backend (e.g., Ntfy) goes down, it will no longer block or crash the delivery of notifications to other functional backends (e.g., Telegram).
+- **Telegram Notification Hardening:** Implemented strict HTML entity escaping for Telegram messages to prevent parsing errors when container names, image tags, or error messages contain sensitive characters (`<`, `>`, `&`).
+
+### Changed
+- **User Fallback Policy:** The fallback to `root` during container recreation (for images without explicit users) is now **disabled by default** to prioritize security. Set `ALLOW_USER_FALLBACK=true` to restore the old behavior.
+- **Update Rate Limiting Strictness:** `MAX_UPDATES_PER_CYCLE` now strictly counts failed attempts and network timeouts against the limit, preventing Watcher from continuously hammering registries when the limit is reached.
+- **Network Resilience (Hard Rollback):** Network disconnects or Docker API availability issues during the recreation phase now trigger an immediate hard rollback to the original container, strictly favoring availability over partial updates.
+- **Anonymous Volume Preservation:** Improved handling of Docker anonymous volumes (64-character hex strings). They are now treated explicitly to prevent data loss or detachment during container recreation.
+
+### Fixed
+- **DST Scheduling:** Daily schedule comparisons use actual timestamps instead of ambiguous local wall-clock ordering, avoiding negative waits and rapid scan loops during autumn's repeated hour.
+- **Shutdown Is Not Unhealthy:** SIGTERM during health verification now records `INTERRUPTED`, retains replacement/backup/transaction for startup recovery and does not create a failure cooldown. Interrupted recovery/rollback verification retains its pending phase instead of claiming an unhealthy image. No further updates, recoveries or dependent restarts begin after shutdown is observed.
+- **Process Failure Visibility:** Unexpected main-loop exceptions propagate to a nonzero process exit. Shutdown notification/connection-cleanup failures do not hide the original crash, and the Docker client is closed on exit.
+- **Normal Entry-Point Verification:** Added optional checks using the unchanged Dockerfile/CMD and real `main.py` process through a private ownership-scoped Docker endpoint, covering interval cycles, registry update/rollback, dry-run, actual UTC scheduling, singleton refusal and SIGTERM/restart recovery. Test helpers, `.env` and development caches are excluded from the image.
+- **Explicit Stop Timeout:** Preserved configured `StopTimeout` through the SDK's supported low-level creation API instead of passing the unsupported high-level keyword and aborting the update.
+- **Primary Network Preservation:** Fixed high-level Docker SDK argument handling that silently discarded primary network endpoint settings and attached replacements to the default bridge. Primary network selection and aliases are now retained, including multi-network setups.
+- **Inherited Image Defaults:** Recreation now compares the inspected container with its original image, retaining differing overrides instead of pinning old image commands, environment, labels and other runtime defaults. Original-image inspection failures abort before stopping the container.
+- **Consistent Global Exclusions:** Name, regex and self-protection rules now apply equally to scans and dependent restarts.
+- **HTTP Dependency Security:** Updated Requests from 2.32.3 to 2.34.2, including the fix for CVE-2024-47081.
+- **Development Verification:** Added regression tests and an opt-in ownership-scoped real Docker lifecycle harness. Pinned Ruff in `requirements-dev.txt` for reproducible local and CI checks; clarified the unreleased status and verification limits.
+- **Extended Docker Verification:** Added real private-registry update/rollback checks, read-write/read-only Linux bind mounts, injected client stop timeouts, and ownership-scoped Linux worker SIGKILL/restart checks at three persisted transaction phases. The test worker is excluded from the production image; these checks are not a production deployment acceptance.
+- **Backup Container Deletion:** Fixed a critical bug where Watcher attempted to delete an existing, conflicting `_backup` container automatically. It now aborts the recreation for safety and leaves the conflict for manual resolution or automatic `startup_recovery()`.
+- **API Fetching Safety:** Errors during Docker daemon interactions (like `containers.list()`) now cleanly abort the cycle rather than falsely reporting 0 containers, preventing corrupted states or empty reports.
+
+
 ## [1.6.0] - 2026-04-12
 ### Added
 - **Persistent Update Journal:** Added local JSON journaling (`journal.json`) to track every scan cycle, container check, and update result across service restarts. Configurable history rotation via `JOURNAL_MAX_ENTRIES`.
@@ -79,7 +112,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - Refactored `WatcherService` for better stability and explicit error handling.
-- Optimized Docker recreation plan logic to ensure bit-perfect replicas.
+- Optimized Docker recreation plan logic to ensure close configuration parity.
 
 ## [1.3.2] - 2026-04-03
 ### Changed

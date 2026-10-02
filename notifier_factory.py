@@ -1,4 +1,5 @@
 import logging
+
 from config import Config
 from discord_notifier import DiscordNotifier
 from multi_notifier import MultiNotifier

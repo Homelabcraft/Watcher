@@ -1,17 +1,17 @@
-# Secrets
 .env
-
-# Python
-__pycache__/
+data/
+*.tmp
+*.log
 *.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-env.bak/
-venv.bak/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.corrupted*
+journal.json
+state.json
+cooldowns.json
 
 # IDEs
 .vscode/

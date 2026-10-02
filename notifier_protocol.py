@@ -1,5 +1,7 @@
 from typing import Protocol, runtime_checkable
+
 from models import ContainerUpdateInfo, ExecutionPlan
+
 
 @runtime_checkable
 class Notifier(Protocol):
@@ -21,9 +23,9 @@ class Notifier(Protocol):
 
     def notify_rollback(self, name: str, status: str, detail: str = "") -> None: ...
 
-    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] = None, duration_sec: float = 0.0) -> None: ...
+    def notify_summary_report(self, summary: dict, infos: list[ContainerUpdateInfo] | None = None, duration_sec: float = 0.0) -> None: ...
     
-    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str = None) -> None: ...
+    def notify_execution_plan(self, plan: ExecutionPlan, next_run: str | None = None) -> None: ...
 
     def notify_summary(self, title: str, message: str) -> None: ...
 

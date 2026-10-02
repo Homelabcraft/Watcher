@@ -1,16 +1,20 @@
-import unittest
-from unittest.mock import MagicMock, patch
 import json
 import os
-import re
+import unittest
 from datetime import datetime, timedelta
-from main import WatcherService
-from config import Config
-from models import UpdateStatus, ContainerUpdateInfo
-from exceptions import ConfigurationError
+from unittest.mock import MagicMock, patch
 
-class TestV1_6Features(unittest.TestCase):
+from base_test import BaseTest
+
+from config import Config
+from exceptions import ConfigurationError
+from main import WatcherService
+from models import ContainerUpdateInfo, UpdateStatus
+
+
+class TestJournalAndNotifications(BaseTest):
     def setUp(self):
+        super().setUp()
         # Mock docker environment
         self.mock_docker_client = MagicMock()
         self.patcher = patch('docker.from_env', return_value=self.mock_docker_client)
@@ -26,8 +30,7 @@ class TestV1_6Features(unittest.TestCase):
 
     def tearDown(self):
         self.patcher.stop()
-        if os.path.exists("test_journal.json"):
-            os.remove("test_journal.json")
+
 
     def test_start_without_notifications(self):
         """Watcher should start cleanly if no notifier is configured."""
@@ -80,7 +83,8 @@ class TestV1_6Features(unittest.TestCase):
             self.assertTrue(service._is_in_cooldown(name))
             
             # Wait for cooldown to expire (simulated)
-            service.failure_tracker[name]["cooldown_until"] = datetime.now() - timedelta(seconds=1)
+            from datetime import timezone
+            service.failure_tracker[name]["cooldown_until"] = datetime.now(timezone.utc) - timedelta(seconds=1)
             self.assertFalse(service._is_in_cooldown(name))
             
             # Successful check should clear it
@@ -95,60 +99,53 @@ class TestV1_6Features(unittest.TestCase):
             self.assertNotIn(name, service.failure_tracker)
 
     def test_journal_writing(self):
-        """Check if journal file is created and contains expected data."""
-        os.environ["JOURNAL_PATH"] = "test_journal.json"
-        service = WatcherService()
-        
-        summary = {"updated": ["app1"], "failed": [], "rolled_back": [], "reported": [], "skipped": []}
-        info = ContainerUpdateInfo("app1", "id1", UpdateStatus.UPDATED)
-        info.duration_sec = 5.5
-        
-        service.journal.record_cycle(1, "LIVE", summary, [info], 10.0)
-        
-        self.assertTrue(os.path.exists("test_journal.json"))
-        with open("test_journal.json", "r") as f:
-            data = json.load(f)
-            self.assertEqual(len(data), 1)
-            self.assertEqual(data[0]["summary"]["updated"], ["app1"])
-            self.assertEqual(data[0]["events"][0]["name"], "app1")
+        """Journal must write cycle outcomes cleanly"""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
+            path = f.name
+            
+        try:
+            os.environ["JOURNAL_PATH"] = path
+            service = WatcherService()
+            
+            summary = {"updated": ["app1"], "failed": [], "rolled_back": [], "reported": [], "skipped": []}
+            info = ContainerUpdateInfo("app1", "id1", UpdateStatus.UPDATED)
+            info.duration_sec = 5.5
+            
+            service.journal.record_cycle(1, "LIVE", summary, [info], 10.0)
+            
+            self.assertTrue(os.path.exists(path))
+            with open(path, "r") as f:
+                data = json.load(f)
+                self.assertEqual(len(data), 1)
+                self.assertEqual(data[0]["summary"]["updated"], ["app1"])
+                self.assertEqual(data[0]["events"][0]["name"], "app1")
+        finally:
+            if "JOURNAL_PATH" in os.environ:
+                del os.environ["JOURNAL_PATH"]
 
     def test_summary_strategies(self):
-        """Test always, on_change, and on_error strategies."""
-        # Setup
+        """Test always, on_change, and on_error strategies with empty cycle."""
         service = WatcherService()
         service.notifier.notify_summary_report = MagicMock()
-        
-        # 1. Strategy: on_error, but only 'reported' exists -> No notification
-        service.config.notify_summary_strategy = "on_error"
-        summary = {"updated": [], "failed": [], "rolled_back": [], "reported": ["app1"], "skipped": []}
-        
-        # Need to patch run_cycle's container list
         service.docker.get_watched_containers = MagicMock(return_value=([], []))
         
-        # Manual trigger of end-of-cycle logic logic
-        def check_strategy(summ):
-            should = False
-            strat = service.config.notify_summary_strategy
-            
-            has_errors = len(summ["failed"]) > 0 or len(summ["rolled_back"]) > 0
-            has_actions = len(summ["updated"]) > 0 or has_errors
-            
-            if strat == "always": should = True
-            elif strat == "on_error": should = has_errors
-            elif strat == "on_change": should = has_actions
-            return should
-
-        self.assertFalse(check_strategy(summary))
+        # Test always -> Yes notification
+        service.config.notify_summary_strategy = "always"
+        service.run_cycle()
+        service.notifier.notify_summary_report.assert_called_once()
+        service.notifier.notify_summary_report.reset_mock()
         
-        # 2. Strategy: on_change, updated exists -> Yes notification
+        # Test on_change -> No notification
         service.config.notify_summary_strategy = "on_change"
-        summary["updated"] = ["app2"]
-        self.assertTrue(check_strategy(summary))
+        service.run_cycle()
+        service.notifier.notify_summary_report.assert_not_called()
         
-        # 3. Strategy: on_change, only reported exists -> No notification (Decision: change = action taken)
-        summary["updated"] = []
-        summary["reported"] = ["app3"]
-        self.assertFalse(check_strategy(summary))
+        # Test on_error -> No notification
+        service.config.notify_summary_strategy = "on_error"
+        service.run_cycle()
+        service.notifier.notify_summary_report.assert_not_called()
 
     def test_run_cycle_no_notifications(self):
         """A full cycle should run without errors even if notifications are disabled."""
@@ -175,12 +172,23 @@ class TestV1_6Features(unittest.TestCase):
         service.process_container.assert_not_called()
 
     def test_journal_io_error_handling(self):
-        """Watcher should remain stable if the journal file is not writable."""
-        with patch("builtins.open", side_effect=IOError("Permission denied")):
+        """Journal muss gracefully failen, wenn Disk voll ist"""
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            self.addCleanup(lambda p=f.name: __import__('os').remove(p) if __import__('os').path.exists(p) else None)
+            path = f.name
+            
+        try:
+            os.environ["JOURNAL_PATH"] = path
             service = WatcherService()
-            # Try to record a cycle - should log error but not crash
-            service.journal.record_cycle(1, "LIVE", {}, [], 1.0)
+            with patch("builtins.open", side_effect=OSError("Disk full")):
+                # Should not crash the process
+                service.journal.record_cycle(1, "LIVE", {}, [], 1.0)
             self.assertEqual(len(service.journal._history), 1)
+        finally:
+            if "JOURNAL_PATH" in os.environ:
+                del os.environ["JOURNAL_PATH"]
 
     def test_max_updates_limit(self):
         """Cycle should respect MAX_UPDATES_PER_CYCLE."""
@@ -198,8 +206,12 @@ class TestV1_6Features(unittest.TestCase):
         service.process_container = MagicMock(side_effect=mock_process)
         service.run_cycle()
         
-        # Should only have called process_container once for auto-update
-        self.assertEqual(service.process_container.call_count, 1)
+        # Should only have called process_container once for auto-update and once for report
+        self.assertEqual(service.process_container.call_count, 2)
+        args1 = service.process_container.call_args_list[0]
+        args2 = service.process_container.call_args_list[1]
+        self.assertTrue(args1[1].get('auto_update', True))
+        self.assertFalse(args2[1].get('auto_update', True))
 
 if __name__ == '__main__':
     unittest.main()
